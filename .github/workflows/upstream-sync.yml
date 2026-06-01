@@ -1,0 +1,91 @@
+name: SteamSpire Upstream Sync
+
+on:
+  schedule:
+    - cron: '17 10 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: Upstream ref to merge from garrytan/gbrain
+        required: false
+        default: master
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: steamspire-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'SteamSpire/gbrain'
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_REF: ${{ github.event.inputs.upstream_ref || 'master' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream into sync branch
+        id: merge
+        run: |
+          set -euo pipefail
+
+          git config user.name "steamspire-bot"
+          git config user.email "bot@steamspire.ai"
+          git remote add upstream https://github.com/garrytan/gbrain.git
+          git fetch upstream "$UPSTREAM_REF"
+
+          upstream_sha="$(git rev-parse FETCH_HEAD)"
+          current_sha="$(git rev-parse HEAD)"
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          echo "current_sha=$current_sha" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor "$upstream_sha" HEAD; then
+            echo "synced=true" >> "$GITHUB_OUTPUT"
+            echo "SteamSpire/gbrain already contains upstream $upstream_sha"
+            exit 0
+          fi
+
+          branch="steamspire/upstream-sync-${upstream_sha:0:12}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+          git checkout -B "$branch"
+          git merge --no-edit FETCH_HEAD
+          git push --force-with-lease origin "$branch"
+          echo "synced=false" >> "$GITHUB_OUTPUT"
+
+      - name: Open sync PR
+        if: steps.merge.outputs.synced != 'true'
+        env:
+          BRANCH: ${{ steps.merge.outputs.branch }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
+          CURRENT_SHA: ${{ steps.merge.outputs.current_sha }}
+        run: |
+          set -euo pipefail
+
+          existing="$(gh pr list --head "$BRANCH" --base master --state open --json url --jq '.[0].url // ""')"
+          if [ -n "$existing" ]; then
+            echo "Existing upstream-sync PR: $existing"
+            exit 0
+          fi
+
+          gh pr create \
+            --base master \
+            --head "$BRANCH" \
+            --title "chore(gbrain): sync upstream ${UPSTREAM_SHA:0:12}" \
+            --body "$(cat <<BODY
+          Automated SteamSpire mirror sync from garrytan/gbrain.
+
+          - Upstream: garrytan/gbrain@$UPSTREAM_SHA
+          - Previous SteamSpire head: $CURRENT_SHA
+
+          This PR intentionally does not update tenant release manifests. After
+          review and CI pass, Harbormaster release creation can pin the merged
+          SteamSpire/gbrain SHA through the normal tenant release flow.
+          BODY
+          )"
