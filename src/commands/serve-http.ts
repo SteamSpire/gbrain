@@ -95,6 +95,27 @@ function routeParam(value: string | string[] | undefined): string {
 
 type TakeReviewStatus = 'active' | 'needs_review' | 'superseded' | 'retracted';
 
+type InternalContradictionTake = {
+  id?: number | string;
+  source_id?: string | null;
+  page_id?: number;
+  page_slug: string;
+  row_num: number;
+  claim: string;
+  kind: string;
+  holder: string;
+  weight: number;
+  status?: string;
+};
+
+type InternalContradictionCandidate = {
+  first_take: InternalContradictionTake;
+  second_take: InternalContradictionTake;
+  reason: string;
+  confidence: number;
+  shared_key: string;
+};
+
 function normalizeTakeReviewStatus(value: unknown): TakeReviewStatus | null {
   if (typeof value !== 'string') return null;
   const status = value.trim();
@@ -102,6 +123,58 @@ function normalizeTakeReviewStatus(value: unknown): TakeReviewStatus | null {
     return status;
   }
   return null;
+}
+
+function normalizeContradictionClaim(claim: string): { key: string; negated: boolean } {
+  const parts = claim.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+  const kept: string[] = [];
+  let negated = false;
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (!part) continue;
+    if (part === 'not' || part === 'never' || part === 'no' || part === 'dont' || part === "don't") {
+      negated = true;
+      continue;
+    }
+    if (part === 'do' && parts[i + 1] === 'not') {
+      negated = true;
+      i++;
+      continue;
+    }
+    kept.push(part);
+  }
+  return { key: kept.join(' '), negated };
+}
+
+export function buildInternalContradictionCandidates(
+  takes: InternalContradictionTake[],
+  limit: number,
+): InternalContradictionCandidate[] {
+  const positiveByKey = new Map<string, InternalContradictionTake[]>();
+  const negativeByKey = new Map<string, InternalContradictionTake[]>();
+  for (const take of takes) {
+    const { key, negated } = normalizeContradictionClaim(take.claim);
+    if (!key) continue;
+    const bucket = negated ? negativeByKey : positiveByKey;
+    bucket.set(key, [...(bucket.get(key) ?? []), take]);
+  }
+  const out: InternalContradictionCandidate[] = [];
+  for (const [key, positives] of positiveByKey) {
+    const negatives = negativeByKey.get(key) ?? [];
+    for (const positive of positives) {
+      for (const negative of negatives) {
+        out.push({
+          first_take: positive,
+          second_take: negative,
+          reason: 'one claim appears to negate the other',
+          confidence: 0.6,
+          shared_key: key,
+        });
+        if (out.length >= limit) return out;
+      }
+    }
+  }
+  return out;
 }
 
 function internalOperationContext(
@@ -1153,6 +1226,56 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           weight: take.weight,
           status: take.review_status,
         },
+      });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.post('/contradictions', async (req: Request, res: Response) => {
+    const sourceIds = normalizeStringArray(req.body?.source_ids);
+    const limit = Math.max(1, Math.min(200, Math.floor(typeof req.body?.limit === 'number' ? req.body.limit : 50)));
+    if (!Array.isArray(req.body?.source_ids)) {
+      internalJsonError(res, 400, 'invalid_params', 'source_ids must be an explicit array');
+      return;
+    }
+    if (sourceIds.length === 0) {
+      res.json({ candidates: [], total: 0, gaps: ['No accessible GBrain sources matched this request.'] });
+      return;
+    }
+    try {
+      const takes: InternalContradictionTake[] = [];
+      const pageSize = 500;
+      for (let offset = 0; offset < 5000 && takes.length < 5000; offset += pageSize) {
+        const batch = await engine.listTakes({
+          sourceIds,
+          active: true,
+          reviewStatus: 'active',
+          limit: pageSize,
+          offset,
+        });
+        if (batch.length === 0) break;
+        for (const take of batch) {
+          takes.push({
+            id: take.id,
+            source_id: take.source_id ?? null,
+            page_id: take.page_id,
+            page_slug: take.page_slug,
+            row_num: take.row_num,
+            claim: take.claim,
+            kind: take.kind,
+            holder: take.holder,
+            weight: take.weight,
+            status: take.review_status,
+          });
+        }
+        if (batch.length < pageSize) break;
+      }
+      const candidates = buildInternalContradictionCandidates(takes, limit);
+      res.json({
+        candidates,
+        total: candidates.length,
+        gaps: candidates.length === 0 ? ['No contradiction candidates matched this request.'] : [],
       });
     } catch (e) {
       handleInternalError(res, e);
