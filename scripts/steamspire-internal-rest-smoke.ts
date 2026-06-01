@@ -82,6 +82,22 @@ async function main() {
   });
   if (!found) throw new Error('Scoped search did not return the smoke page.');
 
+  const contextPack = assertRecord(await request('/internal/v1/context-pack', {
+    method: 'POST',
+    body: JSON.stringify({
+      task: 'tenant-shaped Postgres smoke needle',
+      source_ids: [sourceId],
+      limit: 5,
+    }),
+  }), 'context-pack');
+  const contextResults = Array.isArray(contextPack.search_results) ? contextPack.search_results : [];
+  const contextFound = contextResults.some((row) => {
+    if (!row || typeof row !== 'object') return false;
+    const result = row as Record<string, unknown>;
+    return result.source_id === sourceId && result.slug === pageSlug;
+  });
+  if (!contextFound) throw new Error('Scoped context pack did not return the smoke page.');
+
   const empty = assertRecord(await request('/internal/v1/search', {
     method: 'POST',
     body: JSON.stringify({
@@ -93,6 +109,31 @@ async function main() {
   }), 'empty-source search');
   if (Array.isArray(empty.results) && empty.results.length !== 0) {
     throw new Error('Empty source list returned results.');
+  }
+
+  const emptyContextPack = assertRecord(await request('/internal/v1/context-pack', {
+    method: 'POST',
+    body: JSON.stringify({
+      task: 'tenant-shaped Postgres smoke needle',
+      source_ids: [],
+      limit: 5,
+    }),
+  }), 'empty-source context-pack');
+  if (Array.isArray(emptyContextPack.search_results) && emptyContextPack.search_results.length !== 0) {
+    throw new Error('Empty source list returned context-pack search results.');
+  }
+
+  const emptyAnswer = assertRecord(await request('/internal/v1/answer', {
+    method: 'POST',
+    body: JSON.stringify({
+      question: 'tenant-shaped Postgres smoke needle',
+      source_ids: [],
+      limit: 5,
+    }),
+  }), 'empty-source answer');
+  const answerGaps = Array.isArray(emptyAnswer.gaps) ? emptyAnswer.gaps : [];
+  if (answerGaps.length === 0) {
+    throw new Error('Empty source answer did not report a gap.');
   }
 
   await request(`/internal/v1/sources/${sourceId}/pages/${pageSlug}`, { method: 'DELETE' });
