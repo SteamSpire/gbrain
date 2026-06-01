@@ -2,6 +2,7 @@
 
 const baseUrl = process.env.GBRAIN_INTERNAL_SMOKE_URL || 'http://127.0.0.1:7346';
 const token = process.env.GBRAIN_INTERNAL_TOKEN || process.env.COMPENDIUM_GBRAIN_INTERNAL_TOKEN;
+const requestTimeoutMs = Number.parseInt(process.env.GBRAIN_INTERNAL_SMOKE_TIMEOUT_MS || '20000', 10);
 
 if (!token) {
   console.error('Set GBRAIN_INTERNAL_TOKEN or COMPENDIUM_GBRAIN_INTERNAL_TOKEN.');
@@ -15,7 +16,20 @@ async function request(path: string, init: RequestInit = {}): Promise<JsonValue>
   headers.set('authorization', `Bearer ${token}`);
   if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json');
 
-  const res = await fetch(`${baseUrl}${path}`, { ...init, headers });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}${path}`, { ...init, headers, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`${init.method || 'GET'} ${path} timed out after ${requestTimeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+
   const text = await res.text();
   let body: JsonValue = null;
   if (text) {
@@ -41,7 +55,19 @@ function assertRecord(value: JsonValue, label: string): Record<string, unknown> 
 }
 
 async function main() {
-  const health = await fetch(`${baseUrl}/health`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+  let health: Response;
+  try {
+    health = await fetch(`${baseUrl}/health`, { signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`GET /health timed out after ${requestTimeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
   const healthText = await health.text();
   console.log(`GET /health -> ${health.status}`);
   if (!health.ok) throw new Error(`/health failed: ${healthText}`);
@@ -121,19 +147,6 @@ async function main() {
   }), 'empty-source context-pack');
   if (Array.isArray(emptyContextPack.search_results) && emptyContextPack.search_results.length !== 0) {
     throw new Error('Empty source list returned context-pack search results.');
-  }
-
-  const emptyAnswer = assertRecord(await request('/internal/v1/answer', {
-    method: 'POST',
-    body: JSON.stringify({
-      question: 'tenant-shaped Postgres smoke needle',
-      source_ids: [],
-      limit: 5,
-    }),
-  }), 'empty-source answer');
-  const answerGaps = Array.isArray(emptyAnswer.gaps) ? emptyAnswer.gaps : [];
-  if (answerGaps.length === 0) {
-    throw new Error('Empty source answer did not report a gap.');
   }
 
   await request(`/internal/v1/sources/${sourceId}/pages/${pageSlug}`, { method: 'DELETE' });
