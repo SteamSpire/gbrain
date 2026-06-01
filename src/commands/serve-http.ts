@@ -22,7 +22,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
-import type { BrainEngine } from '../core/engine.ts';
+import type { BrainEngine, LinkBatchInput, TakeBatchInput } from '../core/engine.ts';
 import type { GraphPath, Page } from '../core/types.ts';
 import { operations, operationsByName, OperationError } from '../core/operations.ts';
 import type { OperationContext, AuthInfo } from '../core/operations.ts';
@@ -325,6 +325,145 @@ export function buildInternalPageMarkdown(input: Record<string, unknown>): strin
     frontmatter.content_hash = input.content_hash.trim();
   }
   return `---\n${JSON.stringify(frontmatter, null, 2)}\n---\n\n${content}`;
+}
+
+type InternalDerivedEntity = {
+  name: string;
+  slug: string;
+  type: string;
+  evidence: string;
+};
+
+type InternalDerivedTake = {
+  claim: string;
+  kind: string;
+  heading: string;
+};
+
+function cleanInternalName(value: string): string {
+  return value
+    .trim()
+    .replace(/^[`*_#.:,;]+|[`*_#.:,;]+$/g, '')
+    .split(/\s+/)
+    .join(' ')
+    .slice(0, 160);
+}
+
+function internalEntitySlug(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120);
+  return `entities/${slug || 'unknown'}`;
+}
+
+function internalEntityType(name: string): string {
+  return /\b(inc|llc|ltd|corp|corporation|company|manufacturing|services|platform)\b/i.test(name)
+    ? 'company'
+    : 'entity';
+}
+
+export function deriveInternalEntities(content: string): InternalDerivedEntity[] {
+  const out: InternalDerivedEntity[] = [];
+  const seen = new Set<string>();
+  const wikiRe = /\[\[([^\]|\n]{1,160})(?:\|([^\]\n]{1,160}))?\]\]/g;
+  for (const match of content.matchAll(wikiRe)) {
+    const target = cleanInternalName(match[1] || '');
+    const label = cleanInternalName(match[2] || target);
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      name: label,
+      slug: internalEntitySlug(label),
+      type: internalEntityType(label),
+      evidence: match[0],
+    });
+  }
+  return out;
+}
+
+function internalTakeKindForHeading(heading: string): string {
+  const h = heading.toLowerCase();
+  if (h.includes('decision')) return 'decision';
+  if (h.includes('preference')) return 'preference';
+  if (h.includes('outcome') || h.includes('result')) return 'outcome';
+  if (h.includes('warning') || h.includes('risk') || h.includes('avoid')) return 'warning';
+  if (h.includes('process') || h.includes('procedure') || h.includes('workflow')) return 'process';
+  if (h.includes('metric') || h.includes('kpi')) return 'metric';
+  if (h.includes('open question') || h.includes('question') || h.includes('unknown')) return 'open_question';
+  if (h.includes('constraint') || h.includes('requirement')) return 'constraint';
+  if (h.includes('opportunit')) return 'opportunity';
+  if (h.includes('learn') || h.includes('insight') || h.includes('fact')) return 'fact';
+  return '';
+}
+
+export function deriveInternalTakes(content: string): InternalDerivedTake[] {
+  const out: InternalDerivedTake[] = [];
+  let heading = '';
+  let kind = '';
+  for (const line of content.split('\n')) {
+    const headingMatch = line.match(/^#{1,3}\s+(.{2,160})$/);
+    if (headingMatch) {
+      heading = cleanInternalName(headingMatch[1] || '');
+      kind = internalTakeKindForHeading(heading);
+      continue;
+    }
+    if (!kind) continue;
+    const bulletMatch = line.match(/^\s*(?:[-*]|\d+\.)\s+(.{3,600})$/);
+    if (!bulletMatch) continue;
+    const claim = (bulletMatch[1] || '').trim().replace(/^[`*]+|[`*]+$/g, '').split(/\s+/).join(' ').slice(0, 600);
+    if (claim) out.push({ claim, kind, heading });
+  }
+  return out;
+}
+
+async function refreshInternalPageDerivatives(engine: BrainEngine, sourceId: string, page: Page, content: string): Promise<void> {
+  const entities = deriveInternalEntities(content);
+  for (const entity of entities) {
+    await engine.putPage(entity.slug, {
+      type: entity.type,
+      title: entity.name,
+      compiled_truth: `# ${entity.name}\n\nDerived from SteamSpire Compendium mentions.`,
+      timeline: '',
+      frontmatter: {
+        title: entity.name,
+        type: entity.type,
+        aliases: [],
+        source_kind: 'compendium-derived',
+        ingested_via: 'steamspire-compendium',
+      },
+    }, { sourceId });
+  }
+  const links: LinkBatchInput[] = entities.map((entity) => ({
+    from_slug: page.slug,
+    to_slug: entity.slug,
+    link_type: 'references',
+    context: entity.evidence,
+    link_source: 'markdown',
+    from_source_id: sourceId,
+    to_source_id: sourceId,
+    origin_slug: page.slug,
+    origin_source_id: sourceId,
+    origin_field: 'body',
+  }));
+  if (links.length > 0) await engine.addLinksBatch(links);
+
+  const takes = deriveInternalTakes(content);
+  const rows: TakeBatchInput[] = takes.map((take, index) => ({
+    page_id: page.id,
+    row_num: index + 1,
+    claim: take.claim,
+    kind: take.kind,
+    holder: 'world',
+    weight: 0.75,
+    source: `steamspire-compendium:${take.heading}`,
+    active: true,
+  }));
+  if (rows.length > 0) await engine.addTakesBatch(rows);
 }
 
 /**
@@ -1141,11 +1280,33 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       const warnings = normalizeStringArray(result.warnings);
       const gaps = normalizeStringArray(result.gaps);
       const citations = Array.isArray(result.citations) ? result.citations : [];
+      let answer = typeof result.answer === 'string' ? result.answer.trim() : '';
+      let confidence = citations.length > 0 && !warnings.includes('NO_ANTHROPIC_API_KEY') ? 'medium' : 'low';
+      let answerCitations = citations;
+      if (!answer || warnings.includes('NO_ANTHROPIC_API_KEY')) {
+        const { runGather } = await import('../core/think/gather.ts');
+        const gather = await runGather(engine, {
+          question,
+          gatherLimit: limit,
+          takesLimit: limit,
+          allowedSources: sourceIds,
+        });
+        if (gather.takes.length > 0) {
+          const lines = gather.takes.slice(0, Math.max(1, Math.min(5, limit))).map((take, index) => `- ${take.claim} [G${index + 1}]`);
+          answer = `Based on scoped GBrain takes:\n\n${lines.join('\n')}`;
+          answerCitations = gather.takes.slice(0, lines.length).map((take, index) => ({
+            page_slug: take.page_slug,
+            row_num: take.row_num,
+            citation_index: index + 1,
+          }));
+          confidence = gather.takes.length >= 2 ? 'high' : 'medium';
+        }
+      }
       res.json({
         question: typeof result.question === 'string' ? result.question : question,
-        answer: typeof result.answer === 'string' ? result.answer : '',
-        confidence: citations.length > 0 && !warnings.includes('NO_ANTHROPIC_API_KEY') ? 'medium' : 'low',
-        citations,
+        answer,
+        confidence,
+        citations: answerCitations,
         gaps,
         provider: 'gbrain',
         model: typeof result.modelUsed === 'string' ? result.modelUsed : null,
@@ -1200,6 +1361,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         score: r.score,
       }));
       const takes = gather.takes.map((t) => ({
+        page_id: t.page_id,
         page_slug: t.page_slug,
         row_num: t.row_num,
         claim: t.claim,
@@ -1270,7 +1432,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         .filter((t) => !kind || t.kind === kind)
         .slice(0, takeLimit)
         .map((t) => ({
-          id: 'take_id' in t ? t.take_id : t.id,
+          id: String('take_id' in t ? t.take_id : t.id),
           source_id: 'source_id' in t ? t.source_id : undefined,
           page_id: t.page_id,
           page_slug: t.page_slug,
@@ -1316,7 +1478,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       }
       res.json({
         take: {
-          id: take.id,
+          id: String(take.id),
           source_id: take.source_id,
           page_id: take.page_id,
           page_slug: take.page_slug,
@@ -1358,7 +1520,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         if (batch.length === 0) break;
         for (const take of batch) {
           takes.push({
-            id: take.id,
+            id: String(take.id),
             source_id: take.source_id ?? null,
             page_id: take.page_id,
             page_slug: take.page_slug,
@@ -1535,12 +1697,15 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     const pageSlug = routeParam(req.params.pageSlug);
     try {
       const ctx = internalOperationContext(engine, config, [sourceId]);
+      const content = typeof req.body?.content === 'string' ? req.body.content : '';
       const result = await operationsByName.put_page.handler(ctx, {
         slug: pageSlug,
         content: buildInternalPageMarkdown(req.body ?? {}),
         source_kind: 'compendium',
         ingested_via: 'steamspire-compendium',
       });
+      const page = await engine.getPage(pageSlug, { sourceId });
+      if (page) await refreshInternalPageDerivatives(engine, sourceId, page, content);
       res.json({ status: 'ok', source_id: sourceId, page_slug: pageSlug, result });
     } catch (e) {
       handleInternalError(res, e);

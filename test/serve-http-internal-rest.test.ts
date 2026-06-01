@@ -5,6 +5,8 @@ import {
   buildInternalGraphEdgesFromPaths,
   buildInternalPageMarkdown,
   decodeInternalEntityId,
+  deriveInternalEntities,
+  deriveInternalTakes,
   encodeInternalEntityId,
   normalizeStringArray,
 } from '../src/commands/serve-http.ts';
@@ -96,5 +98,29 @@ describe('SteamSpire internal REST boundary', () => {
     expect(md).toContain('"compendium_document_id": "doc-1"');
     expect(md).toContain('"content_hash": "sha256:abc"');
     expect(md.endsWith('Ship GBrain through Compendium.')).toBe(true);
+  });
+
+  test('compendium page writes derive wiki entities and section takes', () => {
+    const content = `# Acme Notes
+
+[[Acme Inc]] and [[Acme LLC]] should be linked.
+
+## Preferences
+- Use weekly reporting.
+- Do not use weekly reporting.
+
+## Warnings and Risks
+- Avoid mentioning pricing before discovery.
+`;
+
+    expect(deriveInternalEntities(content)).toMatchObject([
+      { name: 'Acme Inc', slug: 'entities/acme-inc', type: 'company' },
+      { name: 'Acme LLC', slug: 'entities/acme-llc', type: 'company' },
+    ]);
+    expect(deriveInternalTakes(content)).toEqual([
+      { claim: 'Use weekly reporting.', kind: 'preference', heading: 'Preferences' },
+      { claim: 'Do not use weekly reporting.', kind: 'preference', heading: 'Preferences' },
+      { claim: 'Avoid mentioning pricing before discovery.', kind: 'warning', heading: 'Warnings and Risks' },
+    ]);
   });
 });
