@@ -1229,8 +1229,9 @@ describe('PR #356 — apply-migrations pre-flight schema-version warning', () =>
 describe('PR #356 + #363 — session timeouts applied via startup parameters', () => {
   test('structural: setSessionDefaults exists for back-compat; resolveSessionTimeouts is the source of truth', () => {
     // PR #356 introduced setSessionDefaults (post-pool SET).
-    // PR #363 superseded it with resolveSessionTimeouts (startup parameters,
-    // PgBouncer-transaction-mode-safe). The setSessionDefaults function is
+    // PR #363 superseded it with resolveSessionTimeouts (startup parameters).
+    // PgBouncer-looking URLs suppress defaults because some poolers reject
+    // extra startup parameters. The setSessionDefaults function is
     // kept as a no-op shim for back-compat with existing call sites.
     const dbSrc = readFileSync(resolve('src/core/db.ts'), 'utf-8');
     const pgSrc = readFileSync(resolve('src/core/postgres-engine.ts'), 'utf-8');
@@ -1241,10 +1242,10 @@ describe('PR #356 + #363 — session timeouts applied via startup parameters', (
     expect(dbSrc).toContain('export function resolveSessionTimeouts');
     expect(dbSrc).toContain('idle_in_transaction_session_timeout');
 
-    // Both connect paths call resolveSessionTimeouts() and feed it through
+    // Both connect paths call resolveSessionTimeouts(url) and feed it through
     // postgres.js's connection option (startup parameters)
-    expect(dbSrc).toContain('resolveSessionTimeouts()');
-    expect(pgSrc).toContain('resolveSessionTimeouts()');
+    expect(dbSrc).toContain('resolveSessionTimeouts(url)');
+    expect(pgSrc).toContain('resolveSessionTimeouts(url)');
 
     // setSessionDefaults still callable (no-op) so existing call sites
     // don't break, but the SET command itself is gone — the work has

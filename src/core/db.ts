@@ -23,11 +23,47 @@ const DEFAULT_POOL_SIZE_FALLBACK = 10;
  * under sustained load and silently drop rows during sync.
  *
  * This is a heuristic, not a protocol guarantee. A direct-Postgres server
- * deliberately bound to 6543 will also get `prepare: false`; the
+ * deliberately bound to 6543 or 6432 will also get `prepare: false`; the
  * `GBRAIN_PREPARE=true` env var (or `?prepare=true` on the URL) is the
  * documented escape hatch.
  */
-const AUTO_DETECT_PORTS = new Set(['6543']);
+const AUTO_DETECT_PORTS = new Set(['6543', '6432']);
+
+const POSTGRES_STARTUP_GUC_PARAMS = new Set([
+  'statement_timeout',
+  'idle_in_transaction_session_timeout',
+  'lock_timeout',
+  'client_connection_check_interval',
+  'maintenance_work_mem',
+  'work_mem',
+  'search_path',
+]);
+
+export function isLikelyPgBouncerUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url.replace(/^postgres(ql)?:\/\//, 'http://'));
+    return AUTO_DETECT_PORTS.has(parsed.port) ||
+      /(^|\.)pgbouncer(\.|$)/i.test(parsed.hostname) ||
+      /(^|\.)pooler(\.|$)/i.test(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function sanitizePostgresClientUrl(url: string): string {
+  try {
+    const scheme = url.match(/^postgres(?:ql)?:\/\//i)?.[0] ?? 'postgres://';
+    const parsed = new URL(url.replace(/^postgres(ql)?:\/\//, 'http://'));
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (POSTGRES_STARTUP_GUC_PARAMS.has(key.toLowerCase())) {
+        parsed.searchParams.delete(key);
+      }
+    }
+    return parsed.toString().replace(/^http:\/\//, scheme);
+  } catch {
+    return url;
+  }
+}
 
 /**
  * Decide whether to force `prepare: true`/`false` on the postgres.js client.
@@ -35,7 +71,7 @@ const AUTO_DETECT_PORTS = new Set(['6543']);
  * Precedence:
  *   1. `GBRAIN_PREPARE` env var (`true`/`1` or `false`/`0`)
  *   2. `?prepare=true|false` query param on the URL
- *   3. Auto-detect: port 6543 → `false`
+ *   3. Auto-detect: PgBouncer-looking URL → `false`
  *   4. Default: `undefined` (caller omits the option; postgres.js default stands)
  *
  * Returns `boolean | undefined`. `undefined` is meaningful — callers MUST
@@ -53,7 +89,7 @@ export function resolvePrepare(url: string): boolean | undefined {
     if (urlPrepare === 'false') return false;
     if (urlPrepare === 'true') return true;
 
-    if (AUTO_DETECT_PORTS.has(parsed.port)) {
+    if (isLikelyPgBouncerUrl(url)) {
       return false;
     }
   } catch {
@@ -102,11 +138,10 @@ export function resolvePoolSize(explicit?: number): number {
  * Set any env var to '0' or 'off' to disable that GUC entirely.
  *
  * Delivered via postgres.js's `connection` option, which sends these as
- * startup parameters in the initial connection packet. Works correctly
- * with PgBouncer session mode AND transaction mode: startup parameters
- * pass through to the backend on connection creation and persist for the
- * backend's lifetime (unlike `SET` commands which transaction-mode
- * PgBouncer strips between transactions).
+ * startup parameters in the initial connection packet. Some PgBouncer
+ * deployments reject these extra startup parameters, so defaults are
+ * suppressed for PgBouncer-looking URLs. Explicit GBRAIN_* env overrides
+ * are still honored.
  *
  * Supersedes the v0.21.0 `setSessionDefaults(sql)` helper, which used
  * a post-pool `SET` command. That approach is unreliable in PgBouncer
@@ -116,12 +151,13 @@ export function resolvePoolSize(explicit?: number): number {
 const DEFAULT_STATEMENT_TIMEOUT = '5min';
 const DEFAULT_IDLE_TX_TIMEOUT = '5min';
 
-export function resolveSessionTimeouts(): Record<string, string> {
+export function resolveSessionTimeouts(url?: string): Record<string, string> {
   const out: Record<string, string> = {};
+  const useDefaults = !url || !isLikelyPgBouncerUrl(url);
   const add = (envKey: string, gucKey: string, defaultVal: string) => {
     const raw = process.env[envKey];
     if (raw === '0' || raw === 'off') return; // explicitly disabled
-    const val = raw ?? defaultVal;
+    const val = raw ?? (useDefaults ? defaultVal : '');
     if (val) out[gucKey] = val;
   };
   add('GBRAIN_STATEMENT_TIMEOUT', 'statement_timeout', DEFAULT_STATEMENT_TIMEOUT);
@@ -179,7 +215,8 @@ export async function connect(config: EngineConfig): Promise<void> {
 
   try {
     const prepare = resolvePrepare(url);
-    const timeouts = resolveSessionTimeouts();
+    const timeouts = resolveSessionTimeouts(url);
+    const clientUrl = sanitizePostgresClientUrl(url);
     const opts: Record<string, unknown> = {
       max: resolvePoolSize(),
       idle_timeout: 20,
@@ -205,7 +242,7 @@ export async function connect(config: EngineConfig): Promise<void> {
         );
       }
     }
-    sql = postgres(url, opts);
+    sql = postgres(clientUrl, opts);
 
     // Test connection
     await sql`SELECT 1`;

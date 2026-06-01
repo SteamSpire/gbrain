@@ -37,7 +37,7 @@
  */
 
 import postgres from 'postgres';
-import { resolvePrepare, resolveSessionTimeouts, resolvePoolSize } from './db.ts';
+import { resolvePrepare, resolveSessionTimeouts, resolvePoolSize, sanitizePostgresClientUrl } from './db.ts';
 import { redactPgUrl } from './url-redact.ts';
 import { logConnectionEvent } from './connection-audit.ts';
 
@@ -258,11 +258,11 @@ export class ConnectionManager {
       connect_timeout: 10,
       types: { bigint: postgres.BigInt },
     };
-    const timeouts = resolveSessionTimeouts();
+    const timeouts = resolveSessionTimeouts(this.opts.url);
     if (Object.keys(timeouts).length > 0) opts.connection = timeouts;
     const prepare = resolvePrepare(this.opts.url);
     if (typeof prepare === 'boolean') opts.prepare = prepare;
-    this._readPool = postgres(this.opts.url, opts);
+    this._readPool = postgres(sanitizePostgresClientUrl(this.opts.url), opts);
     logConnectionEvent({ pool: 'read', op: 'init' });
     return this._readPool;
   }
@@ -351,7 +351,7 @@ export class ConnectionManager {
     };
     const t0 = Date.now();
     try {
-      const pool = postgres(this._directUrl, opts);
+      const pool = postgres(sanitizePostgresClientUrl(this._directUrl), opts);
       // Probe to validate connectivity early.
       await pool`SELECT 1`;
       logConnectionEvent({

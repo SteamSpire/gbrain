@@ -144,7 +144,8 @@ export class PostgresEngine implements BrainEngine {
       // keep orphan pgbouncer backends from holding locks for hours when the
       // postgres.js client disconnects mid-transaction. See resolveSessionTimeouts
       // in db.ts for context + env var overrides.
-      const timeouts = db.resolveSessionTimeouts();
+      const timeouts = db.resolveSessionTimeouts(url);
+      const clientUrl = db.sanitizePostgresClientUrl(url);
       const opts: Record<string, unknown> = {
         max: size,
         idle_timeout: 20,
@@ -162,7 +163,7 @@ export class PostgresEngine implements BrainEngine {
       if (typeof prepare === 'boolean') {
         opts.prepare = prepare;
       }
-      this._sql = postgres(url, opts);
+      this._sql = postgres(clientUrl, opts);
       await this._sql`SELECT 1`;
       await db.setSessionDefaults(this._sql);
       this._connectionStyle = 'instance';
