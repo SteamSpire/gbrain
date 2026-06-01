@@ -51,7 +51,7 @@ async function main() {
 
   await request(`/internal/v1/sources/${sourceId}`, {
     method: 'PUT',
-    body: JSON.stringify({ name: 'SteamSpire Smoke Bucket' }),
+    body: JSON.stringify({ name: `SteamSpire Smoke Bucket ${sourceId}` }),
   });
 
   await request(`/internal/v1/sources/${sourceId}/pages/${pageSlug}`, {
