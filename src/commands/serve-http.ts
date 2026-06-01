@@ -972,6 +972,74 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     }
   });
 
+  internalRouter.post('/context-pack', async (req: Request, res: Response) => {
+    const task = typeof req.body?.task === 'string'
+      ? req.body.task
+      : typeof req.body?.query === 'string'
+        ? req.body.query
+        : '';
+    const limit = typeof req.body?.limit === 'number' ? req.body.limit : 10;
+    const sourceIds = normalizeStringArray(req.body?.source_ids);
+    if (!task.trim()) {
+      internalJsonError(res, 400, 'invalid_params', 'task is required');
+      return;
+    }
+    if (!Array.isArray(req.body?.source_ids)) {
+      internalJsonError(res, 400, 'invalid_params', 'source_ids must be an explicit array');
+      return;
+    }
+    if (sourceIds.length === 0) {
+      res.json({
+        task,
+        search_results: [],
+        takes: [],
+        graph_slugs: [],
+        gaps: ['No accessible GBrain sources matched this request.'],
+      });
+      return;
+    }
+    try {
+      const { runGather } = await import('../core/think/gather.ts');
+      const gather = await runGather(engine, {
+        question: task,
+        gatherLimit: limit,
+        takesLimit: limit,
+        allowedSources: sourceIds,
+      });
+      const searchResults = gather.pages.map((r) => ({
+        source_id: typeof r.source_id === 'string' ? r.source_id : null,
+        slug: r.slug,
+        page_id: r.page_id,
+        title: r.title,
+        chunk_text: r.chunk_text,
+        score: r.score,
+      }));
+      const takes = gather.takes.map((t) => ({
+        page_slug: t.page_slug,
+        row_num: t.row_num,
+        claim: t.claim,
+        kind: t.kind,
+        holder: t.holder,
+        weight: t.weight,
+        score: t.score,
+      }));
+      const gaps = [];
+      if (searchResults.length === 0) gaps.push('No knowledge search results matched the task.');
+      if (takes.length === 0) gaps.push('No structured takes matched the task.');
+      if (gather.graphSlugs.length === 0) gaps.push('No graph context matched the task.');
+      res.json({
+        task,
+        search_results: searchResults,
+        takes,
+        graph_slugs: gather.graphSlugs,
+        gaps,
+        diagnostics: gather.diagnostics,
+      });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
   internalRouter.put('/sources/:sourceId/pages/:pageSlug', async (req: Request, res: Response) => {
     const sourceId = routeParam(req.params.sourceId);
     const pageSlug = routeParam(req.params.pageSlug);
