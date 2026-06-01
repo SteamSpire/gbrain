@@ -23,6 +23,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import type { BrainEngine } from '../core/engine.ts';
+import type { GraphPath } from '../core/types.ts';
 import { operations, operationsByName, OperationError } from '../core/operations.ts';
 import type { OperationContext, AuthInfo } from '../core/operations.ts';
 import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oauth-provider.ts';
@@ -116,6 +117,18 @@ type InternalContradictionCandidate = {
   shared_key: string;
 };
 
+type InternalGraphEdge = {
+  id: string;
+  source_id: string;
+  from_page_slug: string;
+  to_page_slug: string;
+  link_type: string;
+  depth: number;
+  confidence: number;
+  extraction_method: string;
+  evidence_text?: string;
+};
+
 function normalizeTakeReviewStatus(value: unknown): TakeReviewStatus | null {
   if (typeof value !== 'string') return null;
   const status = value.trim();
@@ -173,6 +186,37 @@ export function buildInternalContradictionCandidates(
         if (out.length >= limit) return out;
       }
     }
+  }
+  return out;
+}
+
+export function buildInternalGraphEdgesFromPaths(
+  sourceId: string,
+  paths: GraphPath[],
+  limit: number,
+): InternalGraphEdge[] {
+  const out: InternalGraphEdge[] = [];
+  const seen = new Set<string>();
+  for (const path of paths) {
+    const from = path.from_slug?.trim();
+    const to = path.to_slug?.trim();
+    const linkType = path.link_type?.trim() || 'mentions';
+    if (!from || !to) continue;
+    const key = `${sourceId}\0${from}\0${linkType}\0${to}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      id: `gbrain:${sourceId}:${from}:${linkType}:${to}`,
+      source_id: sourceId,
+      from_page_slug: from,
+      to_page_slug: to,
+      link_type: linkType,
+      depth: Number.isFinite(path.depth) ? path.depth : 1,
+      confidence: 1,
+      extraction_method: 'gbrain',
+      evidence_text: path.context || undefined,
+    });
+    if (out.length >= limit) break;
   }
   return out;
 }
@@ -1276,6 +1320,62 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         candidates,
         total: candidates.length,
         gaps: candidates.length === 0 ? ['No contradiction candidates matched this request.'] : [],
+      });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.post('/graph', async (req: Request, res: Response) => {
+    const sourceIds = normalizeStringArray(req.body?.source_ids);
+    const pageSlugs = normalizeStringArray(req.body?.page_slugs);
+    const limit = Math.max(1, Math.min(200, Math.floor(typeof req.body?.limit === 'number' ? req.body.limit : 100)));
+    const maxDepth = Math.max(1, Math.min(3, Math.floor(typeof req.body?.max_depth === 'number' ? req.body.max_depth : 1)));
+    const directionRaw = typeof req.body?.direction === 'string' ? req.body.direction.trim() : 'both';
+    const direction = directionRaw === 'in' || directionRaw === 'out' || directionRaw === 'both' ? directionRaw : null;
+    if (!Array.isArray(req.body?.source_ids)) {
+      internalJsonError(res, 400, 'invalid_params', 'source_ids must be an explicit array');
+      return;
+    }
+    if (!Array.isArray(req.body?.page_slugs)) {
+      internalJsonError(res, 400, 'invalid_params', 'page_slugs must be an explicit array');
+      return;
+    }
+    if (!direction) {
+      internalJsonError(res, 400, 'invalid_params', 'direction must be in, out, or both');
+      return;
+    }
+    if (sourceIds.length === 0) {
+      res.json({ edges: [], total: 0, gaps: ['No accessible GBrain sources matched this request.'] });
+      return;
+    }
+    if (pageSlugs.length === 0) {
+      res.json({ edges: [], total: 0, gaps: ['No accessible GBrain pages matched this request.'] });
+      return;
+    }
+    try {
+      const edges: InternalGraphEdge[] = [];
+      const seen = new Set<string>();
+      for (const sourceId of sourceIds) {
+        for (const pageSlug of pageSlugs) {
+          if (edges.length >= limit) break;
+          const paths = await engine.traversePaths(pageSlug, {
+            depth: maxDepth,
+            direction,
+            sourceId,
+          });
+          for (const edge of buildInternalGraphEdgesFromPaths(sourceId, paths, limit - edges.length)) {
+            if (seen.has(edge.id)) continue;
+            seen.add(edge.id);
+            edges.push(edge);
+            if (edges.length >= limit) break;
+          }
+        }
+      }
+      res.json({
+        edges,
+        total: edges.length,
+        gaps: edges.length === 0 ? ['No graph edges matched this request.'] : [],
       });
     } catch (e) {
       handleInternalError(res, e);

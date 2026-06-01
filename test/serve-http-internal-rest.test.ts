@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'fs';
 import {
   buildInternalContradictionCandidates,
+  buildInternalGraphEdgesFromPaths,
   buildInternalPageMarkdown,
   normalizeStringArray,
 } from '../src/commands/serve-http.ts';
@@ -16,6 +17,7 @@ describe('SteamSpire internal REST boundary', () => {
     expect(src).toContain("internalRouter.post('/takes'");
     expect(src).toContain("internalRouter.patch('/takes/:takeId'");
     expect(src).toContain("internalRouter.post('/contradictions'");
+    expect(src).toContain("internalRouter.post('/graph'");
     expect(src).toContain("internalRouter.put('/sources/:sourceId/pages/:pageSlug'");
     expect(src).toContain("internalRouter.delete('/sources/:sourceId/pages/:pageSlug'");
     expect(src).toContain("runGather(engine");
@@ -42,6 +44,25 @@ describe('SteamSpire internal REST boundary', () => {
     expect(candidates[0].shared_key).toBe('use weekly reporting');
     expect(candidates[0].first_take.claim).toBe('Use weekly reporting.');
     expect(candidates[0].second_take.claim).toBe('Do not use weekly reporting.');
+  });
+
+  test('graph path edges become source-scoped internal graph edges', () => {
+    const edges = buildInternalGraphEdgesFromPaths('b-one', [
+      { from_slug: 'p-one', to_slug: 'p-two', link_type: 'mentions', context: 'evidence', depth: 1 },
+      { from_slug: 'p-one', to_slug: 'p-two', link_type: 'mentions', context: 'duplicate', depth: 1 },
+      { from_slug: 'p-two', to_slug: 'p-three', link_type: 'supports', context: '', depth: 2 },
+    ], 10);
+
+    expect(edges).toHaveLength(2);
+    expect(edges[0]).toMatchObject({
+      id: 'gbrain:b-one:p-one:mentions:p-two',
+      source_id: 'b-one',
+      from_page_slug: 'p-one',
+      to_page_slug: 'p-two',
+      link_type: 'mentions',
+      evidence_text: 'evidence',
+    });
+    expect(edges[1].depth).toBe(2);
   });
 
   test('page handoff becomes markdown with compendium provenance frontmatter', () => {
