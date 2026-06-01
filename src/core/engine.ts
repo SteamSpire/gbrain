@@ -253,6 +253,7 @@ export interface TakeBatchInput {
 export interface Take {
   id: number;
   page_id: number;
+  source_id?: string;
   page_slug: string;        // joined from pages
   row_num: number;
   claim: string;
@@ -288,6 +289,8 @@ export interface Take {
 export interface TakesListOpts {
   page_id?: number;
   page_slug?: string;       // resolved via JOIN
+  sourceId?: string;
+  sourceIds?: string[];
   holder?: string;
   kind?: TakeKind;
   active?: boolean;         // default true (only active rows)

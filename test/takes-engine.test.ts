@@ -10,6 +10,7 @@ import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 let engine: PGLiteEngine;
 let alicePageId: number;
 let acmePageId: number;
+let hiddenPageId: number;
 
 beforeAll(async () => {
   engine = new PGLiteEngine();
@@ -26,8 +27,19 @@ beforeAll(async () => {
     type: 'company' as const,
     compiled_truth: '## Takes\n\nAcme is a B2B SaaS company.\n',
   });
+  await engine.executeRaw(`
+    INSERT INTO sources (id, name, local_path)
+    VALUES ('hidden-source', 'hidden-source', '/tmp/hidden-source')
+    ON CONFLICT (id) DO NOTHING
+  `);
+  const hidden = await engine.putPage('people/alice-example', {
+    title: 'Hidden Alice Example',
+    type: 'person' as const,
+    compiled_truth: '## Takes\n\nHidden Alice should not leak.\n',
+  }, { sourceId: 'hidden-source' });
   alicePageId = alice.id;
   acmePageId = acme.id;
+  hiddenPageId = hidden.id;
 });
 
 afterAll(async () => {
@@ -86,6 +98,18 @@ describe('addTakesBatch + listTakes', () => {
     // garry takes exist but aren't returned
     const allTakes = await engine.listTakes({});
     expect(allTakes.length).toBeGreaterThan(worldOnly.length);
+  });
+
+  test('listTakes scopes to explicit source ids', async () => {
+    await engine.addTakesBatch([
+      { page_id: hiddenPageId, row_num: 1, claim: 'Hidden source take', kind: 'fact', holder: 'world', weight: 0.95 },
+    ]);
+
+    const defaultTakes = await engine.listTakes({ sourceIds: ['default'] });
+    expect(defaultTakes.some(t => t.claim === 'Hidden source take')).toBe(false);
+
+    const hiddenTakes = await engine.listTakes({ sourceIds: ['hidden-source'] });
+    expect(hiddenTakes.some(t => t.claim === 'Hidden source take')).toBe(true);
   });
 });
 

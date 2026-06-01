@@ -12,6 +12,7 @@ describe('SteamSpire internal REST boundary', () => {
     expect(src).toContain("internalRouter.post('/search'");
     expect(src).toContain("internalRouter.post('/answer'");
     expect(src).toContain("internalRouter.post('/context-pack'");
+    expect(src).toContain("internalRouter.post('/takes'");
     expect(src).toContain("internalRouter.put('/sources/:sourceId/pages/:pageSlug'");
     expect(src).toContain("internalRouter.delete('/sources/:sourceId/pages/:pageSlug'");
     expect(src).toContain("runGather(engine");

@@ -3735,7 +3735,7 @@ export class PGLiteEngine implements BrainEngine {
     for (const pid of pageIds) out.set(pid, []);
     if (pageIds.length === 0) return out;
     const { rows } = await this.db.query(
-      `SELECT t.*, p.slug AS page_slug
+      `SELECT t.*, p.source_id AS source_id, p.slug AS page_slug
        FROM takes t
        JOIN pages p ON p.id = t.page_id
        WHERE t.page_id = ANY($1::int[])
@@ -3905,6 +3905,8 @@ export class PGLiteEngine implements BrainEngine {
     const offset = Math.max(0, Math.floor(opts.offset ?? 0));
     const active = opts.active ?? true;
     const sortBy = opts.sortBy ?? 'created_at';
+    const sourceIds = opts.sourceIds && opts.sourceIds.length > 0 ? opts.sourceIds : null;
+    const sourceId = sourceIds ? null : opts.sourceId ?? null;
     const { rows } = await this.db.query(
       `SELECT t.*, p.slug AS page_slug
        FROM takes t
@@ -3912,23 +3914,27 @@ export class PGLiteEngine implements BrainEngine {
        WHERE 1=1
          AND ($1::int   IS NULL OR t.page_id = $1::int)
          AND ($2::text  IS NULL OR p.slug    = $2::text)
-         AND ($3::text  IS NULL OR t.holder  = $3::text)
-         AND ($4::text  IS NULL OR t.kind    = $4::text)
-         AND ($5::boolean IS NULL OR t.active = $5::boolean)
+         AND ($3::text[] IS NULL OR p.source_id = ANY($3::text[]))
+         AND ($4::text IS NULL OR p.source_id = $4::text)
+         AND ($5::text  IS NULL OR t.holder  = $5::text)
+         AND ($6::text  IS NULL OR t.kind    = $6::text)
+         AND ($7::boolean IS NULL OR t.active = $7::boolean)
          AND (
-           $6::boolean IS NULL
-           OR ($6::boolean = true  AND t.resolved_at IS NOT NULL)
-           OR ($6::boolean = false AND t.resolved_at IS NULL)
+           $8::boolean IS NULL
+           OR ($8::boolean = true  AND t.resolved_at IS NOT NULL)
+           OR ($8::boolean = false AND t.resolved_at IS NULL)
          )
-         AND ($7::text[] IS NULL OR t.holder = ANY($7::text[]))
+         AND ($9::text[] IS NULL OR t.holder = ANY($9::text[]))
        ORDER BY
-         CASE WHEN $8 = 'weight'      THEN t.weight     END DESC NULLS LAST,
-         CASE WHEN $8 = 'since_date'  THEN t.since_date END DESC NULLS LAST,
-         CASE WHEN $8 = 'created_at'  THEN t.created_at END DESC NULLS LAST
-       LIMIT $9 OFFSET $10`,
+         CASE WHEN $10 = 'weight'      THEN t.weight     END DESC NULLS LAST,
+         CASE WHEN $10 = 'since_date'  THEN t.since_date END DESC NULLS LAST,
+         CASE WHEN $10 = 'created_at'  THEN t.created_at END DESC NULLS LAST
+       LIMIT $11 OFFSET $12`,
       [
         opts.page_id ?? null,
         opts.page_slug ?? null,
+        sourceIds,
+        sourceId,
         opts.holder ?? null,
         opts.kind ?? null,
         active,

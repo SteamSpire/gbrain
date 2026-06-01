@@ -3790,7 +3790,7 @@ export class PostgresEngine implements BrainEngine {
     if (pageIds.length === 0) return out;
     const sql = this.sql;
     const rows = await sql`
-      SELECT t.*, p.slug AS page_slug
+      SELECT t.*, p.source_id AS source_id, p.slug AS page_slug
       FROM takes t
       JOIN pages p ON p.id = t.page_id
       WHERE t.page_id = ANY(${pageIds}::int[])
@@ -3971,6 +3971,8 @@ export class PostgresEngine implements BrainEngine {
     const limit = clampSearchLimit(opts.limit, 100, 500);
     const offset = Math.max(0, Math.floor(opts.offset ?? 0));
     const active = opts.active ?? true;
+    const sourceIds = opts.sourceIds && opts.sourceIds.length > 0 ? opts.sourceIds : null;
+    const sourceId = sourceIds ? null : opts.sourceId ?? null;
     const rows = await sql`
       SELECT t.*, p.slug AS page_slug
       FROM takes t
@@ -3978,6 +3980,8 @@ export class PostgresEngine implements BrainEngine {
       WHERE 1=1
         AND (${opts.page_id ?? null}::int   IS NULL OR t.page_id = ${opts.page_id ?? null}::int)
         AND (${opts.page_slug ?? null}::text IS NULL OR p.slug   = ${opts.page_slug ?? null}::text)
+        AND (${sourceIds}::text[] IS NULL OR p.source_id = ANY(${sourceIds}::text[]))
+        AND (${sourceId}::text IS NULL OR p.source_id = ${sourceId})
         AND (${opts.holder ?? null}::text   IS NULL OR t.holder  = ${opts.holder ?? null}::text)
         AND (${opts.kind ?? null}::text     IS NULL OR t.kind    = ${opts.kind ?? null}::text)
         AND (${active}::boolean IS NULL OR t.active = ${active}::boolean)

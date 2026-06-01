@@ -1535,7 +1535,9 @@ const takes_list: Operation = {
     offset: { type: 'number', description: 'Skip first N rows' },
   },
   handler: async (ctx, p) => {
+    const scope = sourceScopeOpts(ctx);
     return ctx.engine.listTakes({
+      ...scope,
       page_slug: p.page_slug as string | undefined,
       holder: p.holder as string | undefined,
       kind: p.kind as never,

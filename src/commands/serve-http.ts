@@ -1040,6 +1040,51 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     }
   });
 
+  internalRouter.post('/takes', async (req: Request, res: Response) => {
+    const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
+    const kind = typeof req.body?.kind === 'string' ? req.body.kind.trim() : '';
+    const status = typeof req.body?.status === 'string' ? req.body.status.trim() : '';
+    const limit = typeof req.body?.limit === 'number' ? req.body.limit : 50;
+    const sourceIds = normalizeStringArray(req.body?.source_ids);
+    if (!Array.isArray(req.body?.source_ids)) {
+      internalJsonError(res, 400, 'invalid_params', 'source_ids must be an explicit array');
+      return;
+    }
+    if (sourceIds.length === 0) {
+      res.json({ takes: [], total: 0, gaps: ['No accessible GBrain sources matched this request.'] });
+      return;
+    }
+    if (status && status !== 'active') {
+      res.json({ takes: [], total: 0, gaps: [`GBrain does not expose ${status} takes through this internal route yet.`] });
+      return;
+    }
+    try {
+      const takeLimit = Math.max(1, Math.min(500, Math.floor(limit || 50)));
+      const rawTakes = query
+        ? await engine.searchTakes(query, { sourceIds, limit: takeLimit })
+        : await engine.listTakes({ sourceIds, kind: kind || undefined, active: true, limit: takeLimit });
+      const takes = rawTakes
+        .filter((t) => !kind || t.kind === kind)
+        .slice(0, takeLimit)
+        .map((t) => ({
+          id: 'take_id' in t ? t.take_id : t.id,
+          source_id: 'source_id' in t ? t.source_id : undefined,
+          page_id: t.page_id,
+          page_slug: t.page_slug,
+          row_num: t.row_num,
+          claim: t.claim,
+          kind: t.kind,
+          holder: t.holder,
+          weight: t.weight,
+          score: 'score' in t ? t.score : undefined,
+          status: 'active',
+        }));
+      res.json({ takes, total: takes.length, gaps: takes.length === 0 ? ['No structured takes matched this request.'] : [] });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
   internalRouter.put('/sources/:sourceId/pages/:pageSlug', async (req: Request, res: Response) => {
     const sourceId = routeParam(req.params.sourceId);
     const pageSlug = routeParam(req.params.pageSlug);
