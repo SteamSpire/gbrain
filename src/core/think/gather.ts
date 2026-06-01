@@ -34,6 +34,10 @@ export interface ThinkGatherOpts {
   questionEmbedding?: Float32Array;
   /** When set, MCP-bound calls forward this allow-list to takes_search. Local CLI leaves unset. */
   takesHoldersAllowList?: string[];
+  /** Scope page/take/graph retrieval to one source. */
+  sourceId?: string;
+  /** Scope page/take/graph retrieval to an explicit source allow-list. Wins over sourceId. */
+  allowedSources?: string[];
 }
 
 export interface ThinkGatherResult {
@@ -105,11 +109,17 @@ export async function runGather(
   // Sanitize the question for any path that includes it in an LLM prompt.
   // (Direct DB search is fine — those are parameterized queries.)
   const sanitizedQuestion = sanitizeQueryForPrompt(opts.question);
+  const sourceScope = opts.allowedSources && opts.allowedSources.length > 0
+    ? { sourceIds: opts.allowedSources }
+    : opts.sourceId
+      ? { sourceId: opts.sourceId }
+      : {};
 
   // Stream 1: hybrid page search (existing primitive).
   const pagesPromise = hybridSearch(engine, opts.question, {
     limit: gatherLimit,
     expansion: false,  // think provides its own anchor + graph context; no need for re-expansion
+    ...sourceScope,
   }).catch((e) => {
     process.stderr.write(`[think.gather] hybrid stream failed: ${(e as Error).message}\n`);
     return [] as SearchResult[];
@@ -119,6 +129,7 @@ export async function runGather(
   const takesKwPromise = engine.searchTakes(opts.question, {
     limit: takesLimit,
     takesHoldersAllowList: opts.takesHoldersAllowList,
+    ...sourceScope,
   }).catch((e) => {
     process.stderr.write(`[think.gather] takes-keyword stream failed: ${(e as Error).message}\n`);
     return [] as TakeHit[];
@@ -129,6 +140,7 @@ export async function runGather(
     ? engine.searchTakesVector(opts.questionEmbedding, {
         limit: takesLimit,
         takesHoldersAllowList: opts.takesHoldersAllowList,
+        ...sourceScope,
       }).catch((e) => {
         process.stderr.write(`[think.gather] takes-vector stream failed: ${(e as Error).message}\n`);
         return [] as TakeHit[];
@@ -137,7 +149,7 @@ export async function runGather(
 
   // Stream 4: graph walk (anchor only).
   const graphPromise: Promise<string[]> = opts.anchor
-    ? engine.traversePaths(opts.anchor, { depth: graphDepth, direction: 'both' })
+    ? engine.traversePaths(opts.anchor, { depth: graphDepth, direction: 'both', ...sourceScope })
         .then(paths => {
           const slugs = new Set<string>([opts.anchor!]);
           for (const p of paths) {

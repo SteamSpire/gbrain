@@ -4002,6 +4002,8 @@ export class PostgresEngine implements BrainEngine {
   async searchTakes(query: string, opts: SearchOpts & { takesHoldersAllowList?: string[] } = {}): Promise<TakeHit[]> {
     const sql = this.sql;
     const limit = clampSearchLimit(opts.limit, 30, 100);
+    const sourceIds = opts.sourceIds && opts.sourceIds.length > 0 ? opts.sourceIds : null;
+    const sourceId = sourceIds ? null : opts.sourceId ?? null;
     const rows = await sql`
       SELECT t.id AS take_id, t.page_id, p.slug AS page_slug, t.row_num,
              t.claim, t.kind, t.holder, t.weight,
@@ -4014,6 +4016,8 @@ export class PostgresEngine implements BrainEngine {
           ${opts.takesHoldersAllowList ?? null}::text[] IS NULL
           OR t.holder = ANY(${opts.takesHoldersAllowList ?? null}::text[])
         )
+        AND (${sourceIds}::text[] IS NULL OR p.source_id = ANY(${sourceIds}::text[]))
+        AND (${sourceId}::text IS NULL OR p.source_id = ${sourceId})
       ORDER BY score DESC, t.weight DESC
       LIMIT ${limit}
     `;
@@ -4027,6 +4031,8 @@ export class PostgresEngine implements BrainEngine {
     const sql = this.sql;
     const limit = clampSearchLimit(opts.limit, 30, 100);
     const vec = `[${Array.from(embedding).join(',')}]`;
+    const sourceIds = opts.sourceIds && opts.sourceIds.length > 0 ? opts.sourceIds : null;
+    const sourceId = sourceIds ? null : opts.sourceId ?? null;
     const rows = await sql`
       SELECT t.id AS take_id, t.page_id, p.slug AS page_slug, t.row_num,
              t.claim, t.kind, t.holder, t.weight,
@@ -4039,6 +4045,8 @@ export class PostgresEngine implements BrainEngine {
           ${opts.takesHoldersAllowList ?? null}::text[] IS NULL
           OR t.holder = ANY(${opts.takesHoldersAllowList ?? null}::text[])
         )
+        AND (${sourceIds}::text[] IS NULL OR p.source_id = ANY(${sourceIds}::text[]))
+        AND (${sourceId}::text IS NULL OR p.source_id = ${sourceId})
       ORDER BY t.embedding <=> ${vec}::vector
       LIMIT ${limit}
     `;

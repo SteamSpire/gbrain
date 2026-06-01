@@ -239,6 +239,8 @@ export async function runThink(
     anchor: opts.anchor,
     questionEmbedding,
     takesHoldersAllowList: opts.takesHoldersAllowList,
+    ...(opts.sourceId !== undefined ? { sourceId: opts.sourceId } : {}),
+    ...(opts.allowedSources !== undefined ? { allowedSources: opts.allowedSources } : {}),
   });
 
   // Render evidence blocks for the prompt

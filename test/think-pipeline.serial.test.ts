@@ -7,6 +7,7 @@ import { runGather } from '../src/core/think/gather.ts';
 
 let engine: PGLiteEngine;
 let alicePageId: number;
+let hiddenAlicePageId: number;
 
 beforeAll(async () => {
   engine = new PGLiteEngine();
@@ -16,10 +17,19 @@ beforeAll(async () => {
     title: 'Alice', type: 'person', compiled_truth: 'Alice founded Acme.',
   });
   alicePageId = alice.id;
+  await engine.executeRaw(
+    `INSERT INTO sources (id, name, config) VALUES ($1, $2, $3::jsonb) ON CONFLICT (id) DO NOTHING`,
+    ['hidden-source', 'Hidden Source', '{}'],
+  );
+  const hiddenAlice = await engine.putPage('people/alice-example', {
+    title: 'Hidden Alice', type: 'person', compiled_truth: 'Alice founded HiddenCo.',
+  }, { sourceId: 'hidden-source' });
+  hiddenAlicePageId = hiddenAlice.id;
   await engine.addTakesBatch([
     { page_id: alicePageId, row_num: 1, claim: 'CEO of Acme', kind: 'fact', holder: 'world', weight: 1.0 },
     { page_id: alicePageId, row_num: 2, claim: 'Strong technical founder', kind: 'take', holder: 'garry', weight: 0.85 },
     { page_id: alicePageId, row_num: 3, claim: 'Will reach $50B', kind: 'bet', holder: 'garry', weight: 0.6 },
+    { page_id: hiddenAlicePageId, row_num: 1, claim: 'Hidden source founder', kind: 'fact', holder: 'world', weight: 1.0 },
   ]);
 });
 
@@ -136,6 +146,16 @@ describe('runGather', () => {
   test('honors takesHoldersAllowList filter', async () => {
     const r = await runGather(engine, { question: 'founder', takesHoldersAllowList: ['world'] });
     expect(r.takes.every(h => h.holder === 'world')).toBe(true);
+  });
+
+  test('honors source scope for gathered takes', async () => {
+    const visible = await runGather(engine, { question: 'founder', sourceId: 'default' });
+    expect(visible.takes.some(h => h.claim === 'Strong technical founder')).toBe(true);
+    expect(visible.takes.some(h => h.claim === 'Hidden source founder')).toBe(false);
+
+    const hidden = await runGather(engine, { question: 'founder', allowedSources: ['hidden-source'] });
+    expect(hidden.takes.some(h => h.claim === 'Hidden source founder')).toBe(true);
+    expect(hidden.takes.some(h => h.claim === 'Strong technical founder')).toBe(false);
   });
 });
 
