@@ -23,7 +23,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import type { BrainEngine } from '../core/engine.ts';
-import type { GraphPath } from '../core/types.ts';
+import type { GraphPath, Page } from '../core/types.ts';
 import { operations, operationsByName, OperationError } from '../core/operations.ts';
 import type { OperationContext, AuthInfo } from '../core/operations.ts';
 import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oauth-provider.ts';
@@ -129,6 +129,23 @@ type InternalGraphEdge = {
   evidence_text?: string;
 };
 
+type InternalEntity = {
+  id: string;
+  source_id: string;
+  page_slug: string;
+  canonical_name: string;
+  entity_type: string;
+  aliases: string[];
+  metadata: Record<string, unknown>;
+};
+
+type InternalEntityDocument = {
+  source_id: string;
+  page_slug: string;
+};
+
+const INTERNAL_ENTITY_PAGE_TYPES = ['person', 'company', 'organization', 'entity'];
+
 function normalizeTakeReviewStatus(value: unknown): TakeReviewStatus | null {
   if (typeof value !== 'string') return null;
   const status = value.trim();
@@ -219,6 +236,46 @@ export function buildInternalGraphEdgesFromPaths(
     if (out.length >= limit) break;
   }
   return out;
+}
+
+export function encodeInternalEntityId(sourceId: string, pageSlug: string): string {
+  return `gbrain:${sourceId}:${Buffer.from(pageSlug, 'utf8').toString('base64url')}`;
+}
+
+export function decodeInternalEntityId(id: string): { source_id: string; page_slug: string } | null {
+  const parts = id.split(':');
+  if (parts.length !== 3 || parts[0] !== 'gbrain' || !parts[1] || !parts[2]) return null;
+  try {
+    const pageSlug = Buffer.from(parts[2], 'base64url').toString('utf8').trim();
+    if (!pageSlug) return null;
+    return { source_id: parts[1], page_slug: pageSlug };
+  } catch {
+    return null;
+  }
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((v) => typeof v === 'string' ? v.trim() : '').filter(Boolean);
+}
+
+function pageToInternalEntity(page: Page): InternalEntity {
+  const metadata = page.frontmatter && typeof page.frontmatter === 'object'
+    ? page.frontmatter as Record<string, unknown>
+    : {};
+  return {
+    id: encodeInternalEntityId(page.source_id, page.slug),
+    source_id: page.source_id,
+    page_slug: page.slug,
+    canonical_name: page.title || page.slug,
+    entity_type: page.type || 'entity',
+    aliases: stringArray(metadata.aliases),
+    metadata,
+  };
+}
+
+function isInternalEntityPage(page: Page): boolean {
+  return INTERNAL_ENTITY_PAGE_TYPES.includes(page.type);
 }
 
 function internalOperationContext(
@@ -1377,6 +1434,97 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         total: edges.length,
         gaps: edges.length === 0 ? ['No graph edges matched this request.'] : [],
       });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.post('/entities', async (req: Request, res: Response) => {
+    const sourceIds = normalizeStringArray(req.body?.source_ids);
+    const query = typeof req.body?.query === 'string' ? req.body.query.trim().toLowerCase() : '';
+    const entityId = typeof req.body?.entity_id === 'string' ? req.body.entity_id.trim() : '';
+    const limit = Math.max(1, Math.min(200, Math.floor(typeof req.body?.limit === 'number' ? req.body.limit : 50)));
+    if (!Array.isArray(req.body?.source_ids)) {
+      internalJsonError(res, 400, 'invalid_params', 'source_ids must be an explicit array');
+      return;
+    }
+    if (sourceIds.length === 0) {
+      res.json({ entities: [], total: 0, gaps: ['No accessible GBrain sources matched this request.'] });
+      return;
+    }
+    try {
+      const sourceSet = new Set(sourceIds);
+      const entities: InternalEntity[] = [];
+      if (entityId) {
+        const decoded = decodeInternalEntityId(entityId);
+        if (!decoded || !sourceSet.has(decoded.source_id)) {
+          res.json({ entities: [], total: 0, gaps: ['No entity matched this request.'] });
+          return;
+        }
+        const page = await engine.getPage(decoded.page_slug, { sourceId: decoded.source_id });
+        if (page && isInternalEntityPage(page)) {
+          entities.push(pageToInternalEntity(page));
+        }
+        res.json({ entities, total: entities.length, gaps: entities.length === 0 ? ['No entity matched this request.'] : [] });
+        return;
+      }
+      for (const entityType of INTERNAL_ENTITY_PAGE_TYPES) {
+        if (entities.length >= limit) break;
+        const pages = await engine.listPages({
+          sourceIds,
+          type: entityType,
+          limit,
+          sort: 'slug',
+        });
+        for (const page of pages) {
+          const entity = pageToInternalEntity(page);
+          if (query) {
+            const haystack = `${entity.canonical_name}\n${entity.page_slug}\n${entity.aliases.join('\n')}`.toLowerCase();
+            if (!haystack.includes(query)) continue;
+          }
+          entities.push(entity);
+          if (entities.length >= limit) break;
+        }
+      }
+      res.json({ entities, total: entities.length, gaps: entities.length === 0 ? ['No entities matched this request.'] : [] });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.post('/entity-documents', async (req: Request, res: Response) => {
+    const sourceIds = normalizeStringArray(req.body?.source_ids);
+    const entityId = typeof req.body?.entity_id === 'string' ? req.body.entity_id.trim() : '';
+    const limit = Math.max(1, Math.min(200, Math.floor(typeof req.body?.limit === 'number' ? req.body.limit : 100)));
+    if (!Array.isArray(req.body?.source_ids)) {
+      internalJsonError(res, 400, 'invalid_params', 'source_ids must be an explicit array');
+      return;
+    }
+    if (!entityId) {
+      internalJsonError(res, 400, 'invalid_params', 'entity_id is required');
+      return;
+    }
+    if (sourceIds.length === 0) {
+      res.json({ documents: [], total: 0, gaps: ['No accessible GBrain sources matched this request.'] });
+      return;
+    }
+    const decoded = decodeInternalEntityId(entityId);
+    if (!decoded || !sourceIds.includes(decoded.source_id)) {
+      res.json({ documents: [], total: 0, gaps: ['No entity matched this request.'] });
+      return;
+    }
+    try {
+      const backlinks = await engine.getBacklinks(decoded.page_slug, { sourceId: decoded.source_id });
+      const documents: InternalEntityDocument[] = [];
+      const seen = new Set<string>();
+      for (const link of backlinks) {
+        const slug = link.from_slug?.trim();
+        if (!slug || slug === decoded.page_slug || seen.has(slug)) continue;
+        seen.add(slug);
+        documents.push({ source_id: decoded.source_id, page_slug: slug });
+        if (documents.length >= limit) break;
+      }
+      res.json({ documents, total: documents.length, gaps: documents.length === 0 ? ['No entity documents matched this request.'] : [] });
     } catch (e) {
       handleInternalError(res, e);
     }

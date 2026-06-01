@@ -4,6 +4,8 @@ import {
   buildInternalContradictionCandidates,
   buildInternalGraphEdgesFromPaths,
   buildInternalPageMarkdown,
+  decodeInternalEntityId,
+  encodeInternalEntityId,
   normalizeStringArray,
 } from '../src/commands/serve-http.ts';
 
@@ -18,6 +20,8 @@ describe('SteamSpire internal REST boundary', () => {
     expect(src).toContain("internalRouter.patch('/takes/:takeId'");
     expect(src).toContain("internalRouter.post('/contradictions'");
     expect(src).toContain("internalRouter.post('/graph'");
+    expect(src).toContain("internalRouter.post('/entities'");
+    expect(src).toContain("internalRouter.post('/entity-documents'");
     expect(src).toContain("internalRouter.put('/sources/:sourceId/pages/:pageSlug'");
     expect(src).toContain("internalRouter.delete('/sources/:sourceId/pages/:pageSlug'");
     expect(src).toContain("runGather(engine");
@@ -63,6 +67,16 @@ describe('SteamSpire internal REST boundary', () => {
       evidence_text: 'evidence',
     });
     expect(edges[1].depth).toBe(2);
+  });
+
+  test('entity ids round-trip source and slash-bearing page slugs', () => {
+    const id = encodeInternalEntityId('b-one', 'companies/acme-inc');
+    expect(id).toBe('gbrain:b-one:Y29tcGFuaWVzL2FjbWUtaW5j');
+    expect(decodeInternalEntityId(id)).toEqual({
+      source_id: 'b-one',
+      page_slug: 'companies/acme-inc',
+    });
+    expect(decodeInternalEntityId('bad')).toBeNull();
   });
 
   test('page handoff becomes markdown with compendium provenance frontmatter', () => {
