@@ -918,6 +918,60 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     }
   });
 
+  internalRouter.post('/answer', async (req: Request, res: Response) => {
+    const question = typeof req.body?.question === 'string' ? req.body.question : '';
+    const limit = typeof req.body?.limit === 'number' ? req.body.limit : 10;
+    const sourceIds = normalizeStringArray(req.body?.source_ids);
+    if (!question.trim()) {
+      internalJsonError(res, 400, 'invalid_params', 'question is required');
+      return;
+    }
+    if (!Array.isArray(req.body?.source_ids)) {
+      internalJsonError(res, 400, 'invalid_params', 'source_ids must be an explicit array');
+      return;
+    }
+    if (sourceIds.length === 0) {
+      res.json({
+        question,
+        answer: 'No accessible GBrain sources matched this request.',
+        confidence: 'low',
+        citations: [],
+        gaps: ['No accessible GBrain sources matched this request.'],
+        provider: 'gbrain',
+        model: null,
+        warnings: [],
+      });
+      return;
+    }
+    try {
+      const ctx = internalOperationContext(engine, config, sourceIds);
+      const raw = await operationsByName.think.handler(ctx, {
+        question,
+        rounds: 1,
+        save: false,
+        take: false,
+        limit,
+      });
+      const result = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+      const warnings = normalizeStringArray(result.warnings);
+      const gaps = normalizeStringArray(result.gaps);
+      const citations = Array.isArray(result.citations) ? result.citations : [];
+      res.json({
+        question: typeof result.question === 'string' ? result.question : question,
+        answer: typeof result.answer === 'string' ? result.answer : '',
+        confidence: citations.length > 0 && !warnings.includes('NO_ANTHROPIC_API_KEY') ? 'medium' : 'low',
+        citations,
+        gaps,
+        provider: 'gbrain',
+        model: typeof result.modelUsed === 'string' ? result.modelUsed : null,
+        warnings,
+        diagnostics: result.diagnostics ?? null,
+      });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
   internalRouter.put('/sources/:sourceId/pages/:pageSlug', async (req: Request, res: Response) => {
     const sourceId = routeParam(req.params.sourceId);
     const pageSlug = routeParam(req.params.pageSlug);
