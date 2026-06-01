@@ -50,6 +50,11 @@ or by a human running raw SQL all get RLS enabled the moment they exist.
 Non-`public` schemas (`auth`, `storage`, `realtime`, etc.) are explicitly
 ignored — Supabase manages those, and we should not touch them.
 
+Some managed Postgres products do not allow service roles to create event
+triggers. In that case v35 continues after logging a warning and still runs
+the one-time backfill below. `gbrain doctor` will warn that the
+`auto_rls_on_create_table` drift-prevention trigger is unavailable.
+
 **2. The one-time backfill.** When you upgrade to v0.26.7, the migration
 walks every existing `public.*` base table whose RLS is off and whose comment
 doesn't carry the `GBRAIN:RLS_EXEMPT` exemption (see below) and enables RLS

@@ -525,6 +525,14 @@ describe('migration v35 — auto_rls_event_trigger structural guards', () => {
     expect(sql.toUpperCase()).not.toContain('EXCEPTION WHEN OTHERS');
   });
 
+  test('tolerates managed Postgres event-trigger privilege denial narrowly', () => {
+    const v35 = MIGRATIONS.find(m => m.version === 35);
+    const sql = ((v35?.sqlFor as any)?.postgres ?? '') as string;
+    expect(sql).toMatch(/EXCEPTION\s+WHEN\s+insufficient_privilege\s+THEN/i);
+    expect(sql).toMatch(/Continuing with one-time RLS backfill only/);
+    expect(sql).toMatch(/CREATE\s+EVENT\s+TRIGGER\s+auto_rls_on_create_table/i);
+  });
+
   test('backfill block uses %I.%I identifier quoting (codex correction)', () => {
     const v35 = MIGRATIONS.find(m => m.version === 35);
     const sql = ((v35?.sqlFor as any)?.postgres ?? '') as string;
@@ -2138,4 +2146,3 @@ describe('migrate v89 — round-trip on PGLite', () => {
     expect(LATEST_VERSION).toBeGreaterThanOrEqual(89);
   });
 });
-

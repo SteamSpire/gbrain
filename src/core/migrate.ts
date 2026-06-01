@@ -1673,9 +1673,10 @@ export const MIGRATIONS: Migration[] = [
     //     the DDL transaction, so a failed ALTER aborts the offending CREATE
     //     TABLE. That's a loud signal, not a silent gap. Wrapping would CREATE
     //     the silent path this migration exists to close.
-    //   - No privilege pre-check — runMigrations rethrows on SQL failure and
-    //     gates config.version, so a non-superuser run already fails loud with
-    //     an actionable Postgres error.
+    //   - Managed Postgres tolerance — some hosted Postgres products reject
+    //     CREATE EVENT TRIGGER even for database-owner service roles. In that
+    //     case we keep the migration moving after the one-time backfill; doctor
+    //     will warn that the drift-prevention trigger is absent.
     //
     // BREAKING CHANGE: the backfill is a one-time override of intentionally
     // RLS-off public tables that don't carry the GBRAIN:RLS_EXEMPT comment.
@@ -1705,11 +1706,18 @@ export const MIGRATIONS: Migration[] = [
         -- WHEN TAG covers all three table-creation syntaxes Postgres reports.
         -- CREATE TABLE / CREATE TABLE AS / SELECT INTO produce distinct command
         -- tags; covering only 'CREATE TABLE' would leave a syntax-shaped hole.
-        DROP EVENT TRIGGER IF EXISTS auto_rls_on_create_table;
-        CREATE EVENT TRIGGER auto_rls_on_create_table
-          ON ddl_command_end
-          WHEN TAG IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
-          EXECUTE FUNCTION auto_enable_rls();
+        DO $$
+        BEGIN
+          DROP EVENT TRIGGER IF EXISTS auto_rls_on_create_table;
+          EXECUTE $ddl$
+            CREATE EVENT TRIGGER auto_rls_on_create_table
+              ON ddl_command_end
+              WHEN TAG IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
+              EXECUTE FUNCTION auto_enable_rls()
+          $ddl$;
+        EXCEPTION WHEN insufficient_privilege THEN
+          RAISE WARNING 'v35 auto_rls_event_trigger: role % cannot create event triggers on this Postgres. Continuing with one-time RLS backfill only; gbrain doctor will warn that auto-RLS drift prevention is unavailable.', current_user;
+        END $$;
 
         -- One-time backfill of every existing public.* base table without RLS.
         -- Honors the same GBRAIN:RLS_EXEMPT regex doctor.ts uses
