@@ -23,7 +23,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import type { BrainEngine } from '../core/engine.ts';
-import { operations, OperationError } from '../core/operations.ts';
+import { operations, operationsByName, OperationError } from '../core/operations.ts';
 import type { OperationContext, AuthInfo } from '../core/operations.ts';
 import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oauth-provider.ts';
 import type { SqlQuery } from '../core/oauth-provider.ts';
@@ -31,7 +31,7 @@ import { hasScope, ALLOWED_SCOPES_LIST, normalizeScopesInput } from '../core/sco
 import { summarizeMcpParams, dispatchToolCall } from '../mcp/dispatch.ts';
 import { paramDefToSchema } from '../mcp/tool-defs.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
-import { loadConfig } from '../core/config.ts';
+import { loadConfig, type GBrainConfig } from '../core/config.ts';
 import { buildError, serializeError } from '../core/errors.ts';
 import { VERSION } from '../version.ts';
 import * as db from '../core/db.ts';
@@ -43,6 +43,104 @@ import {
   type IngestionContentType,
   type IngestionEvent,
 } from '../core/ingestion/types.ts';
+
+const INTERNAL_JSON_LIMIT = process.env.GBRAIN_INTERNAL_MAX_BYTES || '10mb';
+
+export function internalTokenFromEnv(): string | null {
+  const token = process.env.GBRAIN_INTERNAL_TOKEN || process.env.COMPENDIUM_GBRAIN_INTERNAL_TOKEN;
+  const trimmed = token?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function bearerToken(req: Request): string | null {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith('Bearer ')) return null;
+  const token = auth.slice('Bearer '.length).trim();
+  return token.length > 0 ? token : null;
+}
+
+function internalJsonError(res: Response, status: number, error: string, message: string): void {
+  res.status(status).json({ error, message });
+}
+
+function requireInternalAuth(req: Request, res: Response, next: NextFunction): void {
+  const expected = internalTokenFromEnv();
+  if (!expected) {
+    internalJsonError(res, 503, 'internal_auth_not_configured', 'GBRAIN_INTERNAL_TOKEN is not configured');
+    return;
+  }
+  const presented = bearerToken(req);
+  if (!presented) {
+    internalJsonError(res, 401, 'unauthorized', 'missing bearer token');
+    return;
+  }
+
+  const expectedHash = createHash('sha256').update(expected).digest('hex');
+  const presentedHash = createHash('sha256').update(presented).digest('hex');
+  if (!safeHexEqual(expectedHash, presentedHash)) {
+    internalJsonError(res, 401, 'unauthorized', 'invalid bearer token');
+    return;
+  }
+  next();
+}
+
+export function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((v) => typeof v === 'string' ? v.trim() : '').filter(Boolean);
+}
+
+function routeParam(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] || '' : value || '';
+}
+
+function internalOperationContext(
+  engine: BrainEngine,
+  config: GBrainConfig,
+  sourceIds: string[],
+): OperationContext {
+  return {
+    engine,
+    config,
+    logger: {
+      info: (msg: string) => console.error(`[INFO] ${msg}`),
+      warn: (msg: string) => console.error(`[WARN] ${msg}`),
+      error: (msg: string) => console.error(`[ERROR] ${msg}`),
+    },
+    dryRun: false,
+    remote: false,
+    sourceId: sourceIds[0] || 'default',
+    auth: {
+      token: 'internal',
+      clientId: 'steamspire-compendium',
+      clientName: 'SteamSpire Compendium',
+      scopes: ['admin'],
+      sourceId: sourceIds[0] || 'default',
+      allowedSources: sourceIds,
+    },
+  };
+}
+
+export function buildInternalPageMarkdown(input: Record<string, unknown>): string {
+  const title = typeof input.title === 'string' && input.title.trim() ? input.title.trim() : 'Untitled';
+  const content = typeof input.content === 'string' ? input.content : '';
+  const metadata = typeof input.metadata === 'object' && input.metadata !== null && !Array.isArray(input.metadata)
+    ? input.metadata as Record<string, unknown>
+    : {};
+  const frontmatter: Record<string, unknown> = {
+    ...metadata,
+    title,
+    type: typeof metadata.type === 'string' && metadata.type ? metadata.type : 'source',
+    source_kind: 'compendium',
+    ingested_via: 'steamspire-compendium',
+  };
+  if (typeof input.document_id === 'string' && input.document_id.trim()) {
+    frontmatter.compendium_document_id = input.document_id.trim();
+  }
+  if (typeof input.content_hash === 'string' && input.content_hash.trim()) {
+    frontmatter.content_hash = input.content_hash.trim();
+  }
+  return `---\n${JSON.stringify(frontmatter, null, 2)}\n---\n\n${content}`;
+}
 
 /**
  * /health endpoint timeout. 3s rather than 5s: Fly.io's default
@@ -688,6 +786,172 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     const result = await probeLiveness(sql, config.engine || 'pglite', VERSION);
     res.status(result.status).json(result.body);
   });
+
+  const internalRouter = express.Router();
+  internalRouter.use(requireInternalAuth);
+  internalRouter.use(express.json({ limit: INTERNAL_JSON_LIMIT }));
+
+  function handleInternalError(res: Response, e: unknown): void {
+    const serialized = serializeError(e);
+    if (e instanceof OperationError) {
+      const status = e.code === 'page_not_found'
+        ? 404
+        : e.code === 'permission_denied'
+          ? 403
+          : e.code === 'invalid_params'
+            ? 400
+            : 500;
+      internalJsonError(res, status, e.code, e.message);
+      return;
+    }
+    internalJsonError(res, 500, serialized.code, serialized.message);
+  }
+
+  internalRouter.put('/sources/:sourceId', async (req: Request, res: Response) => {
+    const sourceId = routeParam(req.params.sourceId);
+    const name = typeof req.body?.name === 'string' && req.body.name.trim()
+      ? req.body.name.trim()
+      : sourceId;
+    const federated = req.body?.federated === true;
+    try {
+      await engine.executeRaw(
+        `INSERT INTO sources (id, name, config, archived, archived_at, archive_expires_at)
+         VALUES ($1, $2, $3::jsonb, false, NULL, NULL)
+         ON CONFLICT (id) DO UPDATE
+            SET name = EXCLUDED.name,
+                config = COALESCE(sources.config, '{}'::jsonb) || EXCLUDED.config,
+                archived = false,
+                archived_at = NULL,
+                archive_expires_at = NULL`,
+        [sourceId, name, JSON.stringify({ federated, managed_by: 'steamspire-compendium' })],
+      );
+      res.json({ status: 'ok', source_id: sourceId, name, federated });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.delete('/sources/:sourceId', async (req: Request, res: Response) => {
+    const sourceId = routeParam(req.params.sourceId);
+    if (sourceId === 'default') {
+      internalJsonError(res, 400, 'invalid_params', 'default source cannot be archived through the internal API');
+      return;
+    }
+    try {
+      const { softDeleteSource } = await import('../core/destructive-guard.ts');
+      const result = await softDeleteSource(engine, sourceId);
+      res.json({ status: result ? 'archived' : 'not_found_or_already_archived', source_id: sourceId });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.post('/sources/:sourceId/refresh', async (req: Request, res: Response) => {
+    const sourceId = routeParam(req.params.sourceId);
+    try {
+      const { submitEmbedBackfill } = await import('../core/embed-backfill-submit.ts');
+      const submission = await submitEmbedBackfill(engine, sourceId, { reason: 'steamspire-compendium-refresh' });
+      res.status(202).json({ status: 'accepted', source_id: sourceId, submission });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.post('/embeddings/refresh', async (req: Request, res: Response) => {
+    try {
+      const requested = normalizeStringArray(req.body?.source_ids);
+      const sourceIds = requested.length > 0
+        ? requested
+        : (await engine.listAllSources()).map((source) => source.id);
+      const { submitEmbedBackfill } = await import('../core/embed-backfill-submit.ts');
+      const submissions = [];
+      for (const sourceId of sourceIds) {
+        try {
+          submissions.push({
+            source_id: sourceId,
+            ...(await submitEmbedBackfill(engine, sourceId, { reason: 'steamspire-compendium-embeddings-refresh' })),
+          });
+        } catch (e) {
+          submissions.push({ source_id: sourceId, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      res.status(202).json({ status: 'accepted', submissions });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.post('/search', async (req: Request, res: Response) => {
+    const queryText = typeof req.body?.query === 'string' ? req.body.query : '';
+    const mode = req.body?.mode === 'query' ? 'query' : 'search';
+    const limit = typeof req.body?.limit === 'number' ? req.body.limit : 20;
+    const sourceIds = normalizeStringArray(req.body?.source_ids);
+    if (!queryText.trim()) {
+      internalJsonError(res, 400, 'invalid_params', 'query is required');
+      return;
+    }
+    if (!Array.isArray(req.body?.source_ids)) {
+      internalJsonError(res, 400, 'invalid_params', 'source_ids must be an explicit array');
+      return;
+    }
+    if (sourceIds.length === 0) {
+      res.json({ results: [] });
+      return;
+    }
+    try {
+      const op = operationsByName[mode];
+      const ctx = internalOperationContext(engine, config, sourceIds);
+      const raw = await op.handler(ctx, { query: queryText, limit });
+      const results = Array.isArray(raw) ? raw : [];
+      res.json({
+        results: results.map((r) => ({
+          source_id: typeof r.source_id === 'string' ? r.source_id : ctx.sourceId,
+          slug: r.slug,
+          page_id: r.page_id,
+          title: r.title,
+          chunk_text: r.chunk_text,
+          score: r.score,
+        })),
+      });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.put('/sources/:sourceId/pages/:pageSlug', async (req: Request, res: Response) => {
+    const sourceId = routeParam(req.params.sourceId);
+    const pageSlug = routeParam(req.params.pageSlug);
+    try {
+      const ctx = internalOperationContext(engine, config, [sourceId]);
+      const result = await operationsByName.put_page.handler(ctx, {
+        slug: pageSlug,
+        content: buildInternalPageMarkdown(req.body ?? {}),
+        source_kind: 'compendium',
+        ingested_via: 'steamspire-compendium',
+      });
+      res.json({ status: 'ok', source_id: sourceId, page_slug: pageSlug, result });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.delete('/sources/:sourceId/pages/:pageSlug', async (req: Request, res: Response) => {
+    const sourceId = routeParam(req.params.sourceId);
+    const pageSlug = routeParam(req.params.pageSlug);
+    try {
+      const ctx = internalOperationContext(engine, config, [sourceId]);
+      const result = await operationsByName.delete_page.handler(ctx, { slug: pageSlug });
+      res.json({ status: 'ok', source_id: sourceId, page_slug: pageSlug, result });
+    } catch (e) {
+      if (e instanceof OperationError && e.code === 'page_not_found') {
+        res.json({ status: 'not_found', source_id: sourceId, page_slug: pageSlug });
+        return;
+      }
+      handleInternalError(res, e);
+    }
+  });
+
+  app.use('/internal/v1', internalRouter);
 
   // ---------------------------------------------------------------------------
   // Admin authentication (cookie-based)
