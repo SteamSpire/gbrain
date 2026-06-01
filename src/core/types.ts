@@ -828,6 +828,8 @@ export interface SearchOpts {
    * client) → `sourceIds`; otherwise `ctx.sourceId` (scalar) → `sourceId`.
    */
   sourceIds?: string[];
+  /** Scope takes search to a review workflow status. Ignored by page search. */
+  reviewStatus?: 'active' | 'needs_review' | 'superseded' | 'retracted';
   /**
    * v0.27.1 / v0.36 (D11): target column for vector search. Two shapes:
    *

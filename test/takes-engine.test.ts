@@ -118,6 +118,26 @@ describe('addTakesBatch + listTakes', () => {
     const rightSource = await engine.listTakes({ take_id: hiddenTake.id, sourceIds: ['hidden-source'] });
     expect(rightSource).toHaveLength(1);
   });
+
+  test('updateTakeReviewStatus is source-scoped and feeds status filters', async () => {
+    const [take] = await engine.listTakes({ sourceIds: ['default'], kind: 'fact' });
+    const denied = await engine.updateTakeReviewStatus(take.id, 'needs_review', { sourceIds: ['hidden-source'] });
+    expect(denied).toBeNull();
+
+    const updated = await engine.updateTakeReviewStatus(take.id, 'needs_review', { sourceIds: ['default'] });
+    expect(updated?.review_status).toBe('needs_review');
+    expect(updated?.active).toBe(true);
+
+    const reviewItems = await engine.listTakes({ sourceIds: ['default'], reviewStatus: 'needs_review' });
+    expect(reviewItems.some(t => t.id === take.id)).toBe(true);
+
+    const retracted = await engine.updateTakeReviewStatus(take.id, 'retracted', { sourceIds: ['default'] });
+    expect(retracted?.review_status).toBe('retracted');
+    expect(retracted?.active).toBe(false);
+
+    const activeItems = await engine.listTakes({ sourceIds: ['default'], reviewStatus: 'active' });
+    expect(activeItems.some(t => t.id === take.id)).toBe(false);
+  });
 });
 
 describe('searchTakes', () => {

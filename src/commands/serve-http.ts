@@ -93,6 +93,17 @@ function routeParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] || '' : value || '';
 }
 
+type TakeReviewStatus = 'active' | 'needs_review' | 'superseded' | 'retracted';
+
+function normalizeTakeReviewStatus(value: unknown): TakeReviewStatus | null {
+  if (typeof value !== 'string') return null;
+  const status = value.trim();
+  if (status === 'active' || status === 'needs_review' || status === 'superseded' || status === 'retracted') {
+    return status;
+  }
+  return null;
+}
+
 function internalOperationContext(
   engine: BrainEngine,
   config: GBrainConfig,
@@ -1059,7 +1070,15 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       return;
     }
     if (status && status !== 'active') {
-      res.json({ takes: [], total: 0, gaps: [`GBrain does not expose ${status} takes through this internal route yet.`] });
+      if (!normalizeTakeReviewStatus(status)) {
+        internalJsonError(res, 400, 'invalid_params', 'status must be active, needs_review, superseded, or retracted');
+        return;
+      }
+    }
+    const reviewStatus = status ? normalizeTakeReviewStatus(status) : null;
+    const active = reviewStatus === 'superseded' || reviewStatus === 'retracted' ? false : true;
+    if (status && !reviewStatus) {
+      internalJsonError(res, 400, 'invalid_params', 'status must be active, needs_review, superseded, or retracted');
       return;
     }
     if (takeId !== undefined && (!Number.isInteger(takeId) || takeId <= 0)) {
@@ -1069,10 +1088,10 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     try {
       const takeLimit = Math.max(1, Math.min(500, Math.floor(limit || 50)));
       const rawTakes = takeId !== undefined
-        ? await engine.listTakes({ take_id: takeId, sourceIds, kind: kind || undefined, active: true, limit: 1 })
+        ? await engine.listTakes({ take_id: takeId, sourceIds, kind: kind || undefined, active, reviewStatus: reviewStatus ?? undefined, limit: 1 })
         : query
-        ? await engine.searchTakes(query, { sourceIds, limit: takeLimit })
-        : await engine.listTakes({ sourceIds, kind: kind || undefined, active: true, limit: takeLimit });
+        ? await engine.searchTakes(query, { sourceIds, reviewStatus: reviewStatus ?? undefined, limit: takeLimit })
+        : await engine.listTakes({ sourceIds, kind: kind || undefined, active, reviewStatus: reviewStatus ?? undefined, limit: takeLimit });
       const takes = rawTakes
         .filter((t) => !kind || t.kind === kind)
         .slice(0, takeLimit)
@@ -1087,9 +1106,54 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           holder: t.holder,
           weight: t.weight,
           score: 'score' in t ? t.score : undefined,
-          status: 'active',
+          status: 'review_status' in t ? t.review_status : 'active',
         }));
       res.json({ takes, total: takes.length, gaps: takes.length === 0 ? ['No structured takes matched this request.'] : [] });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.patch('/takes/:takeId', async (req: Request, res: Response) => {
+    const takeId = Number(routeParam(req.params.takeId));
+    const sourceIds = normalizeStringArray(req.body?.source_ids);
+    const status = normalizeTakeReviewStatus(req.body?.status);
+    if (!Number.isInteger(takeId) || takeId <= 0) {
+      internalJsonError(res, 400, 'invalid_params', 'take id must be a positive integer');
+      return;
+    }
+    if (!Array.isArray(req.body?.source_ids)) {
+      internalJsonError(res, 400, 'invalid_params', 'source_ids must be an explicit array');
+      return;
+    }
+    if (sourceIds.length === 0) {
+      internalJsonError(res, 404, 'not_found', 'take not found');
+      return;
+    }
+    if (!status) {
+      internalJsonError(res, 400, 'invalid_params', 'status must be active, needs_review, superseded, or retracted');
+      return;
+    }
+    try {
+      const take = await engine.updateTakeReviewStatus(takeId, status, { sourceIds });
+      if (!take) {
+        internalJsonError(res, 404, 'not_found', 'take not found');
+        return;
+      }
+      res.json({
+        take: {
+          id: take.id,
+          source_id: take.source_id,
+          page_id: take.page_id,
+          page_slug: take.page_slug,
+          row_num: take.row_num,
+          claim: take.claim,
+          kind: take.kind,
+          holder: take.holder,
+          weight: take.weight,
+          status: take.review_status,
+        },
+      });
     } catch (e) {
       handleInternalError(res, e);
     }

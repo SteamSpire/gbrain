@@ -5023,6 +5023,20 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE search_telemetry ADD COLUMN IF NOT EXISTS rank1_high INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    version: 112,
+    name: 'takes_review_status',
+    idempotent: true,
+    sql: `
+      ALTER TABLE takes ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'active';
+      ALTER TABLE takes DROP CONSTRAINT IF EXISTS takes_review_status_values;
+      ALTER TABLE takes ADD CONSTRAINT takes_review_status_values CHECK (
+        review_status IN ('active', 'needs_review', 'superseded', 'retracted')
+      );
+      CREATE INDEX IF NOT EXISTS idx_takes_review_status
+        ON takes(review_status, updated_at DESC);
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

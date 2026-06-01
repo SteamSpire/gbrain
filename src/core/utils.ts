@@ -362,6 +362,7 @@ export function takeRowToTake(row: Record<string, unknown>): Take {
     source: row.source == null ? null : String(row.source),
     superseded_by: row.superseded_by == null ? null : Number(row.superseded_by),
     active: Boolean(row.active),
+    review_status: (String(row.review_status ?? 'active') as 'active' | 'needs_review' | 'superseded' | 'retracted'),
     resolved_at: isoOrNull(row.resolved_at),
     resolved_outcome: row.resolved_outcome == null ? null : Boolean(row.resolved_outcome),
     resolved_quality: row.resolved_quality == null

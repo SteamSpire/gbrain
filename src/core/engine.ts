@@ -265,6 +265,7 @@ export interface Take {
   source: string | null;
   superseded_by: number | null;
   active: boolean;
+  review_status: 'active' | 'needs_review' | 'superseded' | 'retracted';
   resolved_at: string | null;
   resolved_outcome: boolean | null;
   /**
@@ -295,6 +296,7 @@ export interface TakesListOpts {
   holder?: string;
   kind?: TakeKind;
   active?: boolean;         // default true (only active rows)
+  reviewStatus?: 'active' | 'needs_review' | 'superseded' | 'retracted';
   resolved?: boolean;       // true = only resolved; false = only unresolved; undefined = both
   /** Per-token MCP allow-list. Server applies AND holder = ANY($takesHoldersAllowList) when set. */
   takesHoldersAllowList?: string[];
@@ -313,6 +315,7 @@ export interface TakeHit {
   kind: TakeKind;
   holder: string;
   weight: number;
+  review_status?: 'active' | 'needs_review' | 'superseded' | 'retracted';
   score: number;            // search rank score (ts_rank for keyword, 1-cos_dist for vector)
 }
 
@@ -1342,6 +1345,12 @@ export interface BrainEngine {
     rowNum: number,
     fields: { weight?: number; since_date?: string; source?: string },
   ): Promise<void>;
+
+  updateTakeReviewStatus(
+    takeId: number,
+    status: 'active' | 'needs_review' | 'superseded' | 'retracted',
+    opts?: { sourceIds?: string[] },
+  ): Promise<Take | null>;
 
   /**
    * Supersede the take at (page_id, oldRow). Marks old row active=false +

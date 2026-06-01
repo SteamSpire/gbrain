@@ -3974,7 +3974,7 @@ export class PostgresEngine implements BrainEngine {
     const sourceIds = opts.sourceIds && opts.sourceIds.length > 0 ? opts.sourceIds : null;
     const sourceId = sourceIds ? null : opts.sourceId ?? null;
     const rows = await sql`
-      SELECT t.*, p.slug AS page_slug
+      SELECT t.*, p.source_id AS source_id, p.slug AS page_slug
       FROM takes t
       JOIN pages p ON p.id = t.page_id
       WHERE 1=1
@@ -3986,6 +3986,7 @@ export class PostgresEngine implements BrainEngine {
         AND (${opts.holder ?? null}::text   IS NULL OR t.holder  = ${opts.holder ?? null}::text)
         AND (${opts.kind ?? null}::text     IS NULL OR t.kind    = ${opts.kind ?? null}::text)
         AND (${active}::boolean IS NULL OR t.active = ${active}::boolean)
+        AND (${opts.reviewStatus ?? null}::text IS NULL OR t.review_status = ${opts.reviewStatus ?? null}::text)
         AND (
           ${opts.resolved === undefined ? null : opts.resolved}::boolean IS NULL
           OR (${opts.resolved === undefined ? null : opts.resolved}::boolean = true  AND t.resolved_at IS NOT NULL)
@@ -4004,6 +4005,29 @@ export class PostgresEngine implements BrainEngine {
     return rows.map((r) => takeRowToTake(r as Record<string, unknown>));
   }
 
+  async updateTakeReviewStatus(
+    takeId: number,
+    status: 'active' | 'needs_review' | 'superseded' | 'retracted',
+    opts: { sourceIds?: string[] } = {},
+  ): Promise<Take | null> {
+    const sql = this.sql;
+    const sourceIds = opts.sourceIds && opts.sourceIds.length > 0 ? opts.sourceIds : null;
+    const active = status === 'active' || status === 'needs_review';
+    const rows = await sql`
+      UPDATE takes t
+      SET review_status = ${status},
+          active = ${active},
+          updated_at = now()
+      FROM pages p
+      WHERE t.page_id = p.id
+        AND t.id = ${takeId}
+        AND (${sourceIds}::text[] IS NULL OR p.source_id = ANY(${sourceIds}::text[]))
+      RETURNING t.*, p.source_id AS source_id, p.slug AS page_slug
+    `;
+    if (rows.length === 0) return null;
+    return takeRowToTake(rows[0] as Record<string, unknown>);
+  }
+
   async searchTakes(query: string, opts: SearchOpts & { takesHoldersAllowList?: string[] } = {}): Promise<TakeHit[]> {
     const sql = this.sql;
     const limit = clampSearchLimit(opts.limit, 30, 100);
@@ -4011,7 +4035,7 @@ export class PostgresEngine implements BrainEngine {
     const sourceId = sourceIds ? null : opts.sourceId ?? null;
     const rows = await sql`
       SELECT t.id AS take_id, t.page_id, p.slug AS page_slug, t.row_num,
-             t.claim, t.kind, t.holder, t.weight,
+             t.claim, t.kind, t.holder, t.weight, t.review_status,
              similarity(t.claim, ${query})::real AS score
       FROM takes t
       JOIN pages p ON p.id = t.page_id
@@ -4023,6 +4047,7 @@ export class PostgresEngine implements BrainEngine {
         )
         AND (${sourceIds}::text[] IS NULL OR p.source_id = ANY(${sourceIds}::text[]))
         AND (${sourceId}::text IS NULL OR p.source_id = ${sourceId})
+        AND (${opts.reviewStatus ?? null}::text IS NULL OR t.review_status = ${opts.reviewStatus ?? null}::text)
       ORDER BY score DESC, t.weight DESC
       LIMIT ${limit}
     `;
@@ -4040,7 +4065,7 @@ export class PostgresEngine implements BrainEngine {
     const sourceId = sourceIds ? null : opts.sourceId ?? null;
     const rows = await sql`
       SELECT t.id AS take_id, t.page_id, p.slug AS page_slug, t.row_num,
-             t.claim, t.kind, t.holder, t.weight,
+             t.claim, t.kind, t.holder, t.weight, t.review_status,
              (1 - (t.embedding <=> ${vec}::vector))::real AS score
       FROM takes t
       JOIN pages p ON p.id = t.page_id
@@ -4052,6 +4077,7 @@ export class PostgresEngine implements BrainEngine {
         )
         AND (${sourceIds}::text[] IS NULL OR p.source_id = ANY(${sourceIds}::text[]))
         AND (${sourceId}::text IS NULL OR p.source_id = ${sourceId})
+        AND (${opts.reviewStatus ?? null}::text IS NULL OR t.review_status = ${opts.reviewStatus ?? null}::text)
       ORDER BY t.embedding <=> ${vec}::vector
       LIMIT ${limit}
     `;

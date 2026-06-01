@@ -3920,17 +3920,18 @@ export class PGLiteEngine implements BrainEngine {
          AND ($6::text  IS NULL OR t.holder  = $6::text)
          AND ($7::text  IS NULL OR t.kind    = $7::text)
          AND ($8::boolean IS NULL OR t.active = $8::boolean)
+         AND ($9::text IS NULL OR t.review_status = $9::text)
          AND (
-           $9::boolean IS NULL
-           OR ($9::boolean = true  AND t.resolved_at IS NOT NULL)
-           OR ($9::boolean = false AND t.resolved_at IS NULL)
+           $10::boolean IS NULL
+           OR ($10::boolean = true  AND t.resolved_at IS NOT NULL)
+           OR ($10::boolean = false AND t.resolved_at IS NULL)
          )
-         AND ($10::text[] IS NULL OR t.holder = ANY($10::text[]))
+         AND ($11::text[] IS NULL OR t.holder = ANY($11::text[]))
        ORDER BY
-         CASE WHEN $11 = 'weight'      THEN t.weight     END DESC NULLS LAST,
-         CASE WHEN $11 = 'since_date'  THEN t.since_date END DESC NULLS LAST,
-         CASE WHEN $11 = 'created_at'  THEN t.created_at END DESC NULLS LAST
-       LIMIT $12 OFFSET $13`,
+         CASE WHEN $12 = 'weight'      THEN t.weight     END DESC NULLS LAST,
+         CASE WHEN $12 = 'since_date'  THEN t.since_date END DESC NULLS LAST,
+         CASE WHEN $12 = 'created_at'  THEN t.created_at END DESC NULLS LAST
+       LIMIT $13 OFFSET $14`,
       [
         opts.take_id ?? null,
         opts.page_id ?? null,
@@ -3940,6 +3941,7 @@ export class PGLiteEngine implements BrainEngine {
         opts.holder ?? null,
         opts.kind ?? null,
         active,
+        opts.reviewStatus ?? null,
         opts.resolved === undefined ? null : opts.resolved,
         opts.takesHoldersAllowList ?? null,
         sortBy,
@@ -3948,6 +3950,29 @@ export class PGLiteEngine implements BrainEngine {
       ]
     );
     return rows.map((r) => takeRowToTake(r as Record<string, unknown>));
+  }
+
+  async updateTakeReviewStatus(
+    takeId: number,
+    status: 'active' | 'needs_review' | 'superseded' | 'retracted',
+    opts: { sourceIds?: string[] } = {},
+  ): Promise<Take | null> {
+    const sourceIds = opts.sourceIds && opts.sourceIds.length > 0 ? opts.sourceIds : null;
+    const active = status === 'active' || status === 'needs_review';
+    const { rows } = await this.db.query(
+      `UPDATE takes AS t
+       SET review_status = $2,
+           active = $3,
+           updated_at = now()
+       FROM pages p
+       WHERE t.page_id = p.id
+         AND t.id = $1
+         AND ($4::text[] IS NULL OR p.source_id = ANY($4::text[]))
+       RETURNING t.*, p.source_id AS source_id, p.slug AS page_slug`,
+      [takeId, status, active, sourceIds],
+    );
+    if (rows.length === 0) return null;
+    return takeRowToTake(rows[0] as Record<string, unknown>);
   }
 
   async searchTakes(
@@ -3959,7 +3984,7 @@ export class PGLiteEngine implements BrainEngine {
     const sourceId = sourceIds ? null : opts.sourceId ?? null;
     const { rows } = await this.db.query(
       `SELECT t.id AS take_id, t.page_id, p.slug AS page_slug, t.row_num,
-              t.claim, t.kind, t.holder, t.weight,
+              t.claim, t.kind, t.holder, t.weight, t.review_status,
               similarity(t.claim, $1)::real AS score
        FROM takes t
        JOIN pages p ON p.id = t.page_id
@@ -3968,9 +3993,10 @@ export class PGLiteEngine implements BrainEngine {
          AND ($2::text[] IS NULL OR t.holder = ANY($2::text[]))
          AND ($4::text[] IS NULL OR p.source_id = ANY($4::text[]))
          AND ($5::text IS NULL OR p.source_id = $5)
+         AND ($6::text IS NULL OR t.review_status = $6)
        ORDER BY score DESC, t.weight DESC
        LIMIT $3`,
-      [query, opts.takesHoldersAllowList ?? null, limit, sourceIds, sourceId]
+      [query, opts.takesHoldersAllowList ?? null, limit, sourceIds, sourceId, opts.reviewStatus ?? null]
     );
     return rows as unknown as TakeHit[];
   }
@@ -3985,7 +4011,7 @@ export class PGLiteEngine implements BrainEngine {
     const sourceId = sourceIds ? null : opts.sourceId ?? null;
     const { rows } = await this.db.query(
       `SELECT t.id AS take_id, t.page_id, p.slug AS page_slug, t.row_num,
-              t.claim, t.kind, t.holder, t.weight,
+              t.claim, t.kind, t.holder, t.weight, t.review_status,
               (1 - (t.embedding <=> $1::vector))::real AS score
        FROM takes t
        JOIN pages p ON p.id = t.page_id
@@ -3994,9 +4020,10 @@ export class PGLiteEngine implements BrainEngine {
          AND ($2::text[] IS NULL OR t.holder = ANY($2::text[]))
          AND ($4::text[] IS NULL OR p.source_id = ANY($4::text[]))
          AND ($5::text IS NULL OR p.source_id = $5)
+         AND ($6::text IS NULL OR t.review_status = $6)
        ORDER BY t.embedding <=> $1::vector
        LIMIT $3`,
-      [vec, opts.takesHoldersAllowList ?? null, limit, sourceIds, sourceId]
+      [vec, opts.takesHoldersAllowList ?? null, limit, sourceIds, sourceId, opts.reviewStatus ?? null]
     );
     return rows as unknown as TakeHit[];
   }
