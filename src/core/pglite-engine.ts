@@ -3912,25 +3912,27 @@ export class PGLiteEngine implements BrainEngine {
        FROM takes t
        JOIN pages p ON p.id = t.page_id
        WHERE 1=1
-         AND ($1::int   IS NULL OR t.page_id = $1::int)
-         AND ($2::text  IS NULL OR p.slug    = $2::text)
-         AND ($3::text[] IS NULL OR p.source_id = ANY($3::text[]))
-         AND ($4::text IS NULL OR p.source_id = $4::text)
-         AND ($5::text  IS NULL OR t.holder  = $5::text)
-         AND ($6::text  IS NULL OR t.kind    = $6::text)
-         AND ($7::boolean IS NULL OR t.active = $7::boolean)
+         AND ($1::int   IS NULL OR t.id      = $1::int)
+         AND ($2::int   IS NULL OR t.page_id = $2::int)
+         AND ($3::text  IS NULL OR p.slug    = $3::text)
+         AND ($4::text[] IS NULL OR p.source_id = ANY($4::text[]))
+         AND ($5::text IS NULL OR p.source_id = $5::text)
+         AND ($6::text  IS NULL OR t.holder  = $6::text)
+         AND ($7::text  IS NULL OR t.kind    = $7::text)
+         AND ($8::boolean IS NULL OR t.active = $8::boolean)
          AND (
-           $8::boolean IS NULL
-           OR ($8::boolean = true  AND t.resolved_at IS NOT NULL)
-           OR ($8::boolean = false AND t.resolved_at IS NULL)
+           $9::boolean IS NULL
+           OR ($9::boolean = true  AND t.resolved_at IS NOT NULL)
+           OR ($9::boolean = false AND t.resolved_at IS NULL)
          )
-         AND ($9::text[] IS NULL OR t.holder = ANY($9::text[]))
+         AND ($10::text[] IS NULL OR t.holder = ANY($10::text[]))
        ORDER BY
-         CASE WHEN $10 = 'weight'      THEN t.weight     END DESC NULLS LAST,
-         CASE WHEN $10 = 'since_date'  THEN t.since_date END DESC NULLS LAST,
-         CASE WHEN $10 = 'created_at'  THEN t.created_at END DESC NULLS LAST
-       LIMIT $11 OFFSET $12`,
+         CASE WHEN $11 = 'weight'      THEN t.weight     END DESC NULLS LAST,
+         CASE WHEN $11 = 'since_date'  THEN t.since_date END DESC NULLS LAST,
+         CASE WHEN $11 = 'created_at'  THEN t.created_at END DESC NULLS LAST
+       LIMIT $12 OFFSET $13`,
       [
+        opts.take_id ?? null,
         opts.page_id ?? null,
         opts.page_slug ?? null,
         sourceIds,

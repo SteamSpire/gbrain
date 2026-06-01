@@ -3978,6 +3978,7 @@ export class PostgresEngine implements BrainEngine {
       FROM takes t
       JOIN pages p ON p.id = t.page_id
       WHERE 1=1
+        AND (${opts.take_id ?? null}::int IS NULL OR t.id = ${opts.take_id ?? null}::int)
         AND (${opts.page_id ?? null}::int   IS NULL OR t.page_id = ${opts.page_id ?? null}::int)
         AND (${opts.page_slug ?? null}::text IS NULL OR p.slug   = ${opts.page_slug ?? null}::text)
         AND (${sourceIds}::text[] IS NULL OR p.source_id = ANY(${sourceIds}::text[]))

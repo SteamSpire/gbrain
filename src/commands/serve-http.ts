@@ -1045,6 +1045,10 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     const kind = typeof req.body?.kind === 'string' ? req.body.kind.trim() : '';
     const status = typeof req.body?.status === 'string' ? req.body.status.trim() : '';
     const limit = typeof req.body?.limit === 'number' ? req.body.limit : 50;
+    const takeIdRaw = req.body?.take_id;
+    const takeId = takeIdRaw === undefined || takeIdRaw === null || takeIdRaw === ''
+      ? undefined
+      : Number(takeIdRaw);
     const sourceIds = normalizeStringArray(req.body?.source_ids);
     if (!Array.isArray(req.body?.source_ids)) {
       internalJsonError(res, 400, 'invalid_params', 'source_ids must be an explicit array');
@@ -1058,9 +1062,15 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       res.json({ takes: [], total: 0, gaps: [`GBrain does not expose ${status} takes through this internal route yet.`] });
       return;
     }
+    if (takeId !== undefined && (!Number.isInteger(takeId) || takeId <= 0)) {
+      internalJsonError(res, 400, 'invalid_params', 'take_id must be a positive integer');
+      return;
+    }
     try {
       const takeLimit = Math.max(1, Math.min(500, Math.floor(limit || 50)));
-      const rawTakes = query
+      const rawTakes = takeId !== undefined
+        ? await engine.listTakes({ take_id: takeId, sourceIds, kind: kind || undefined, active: true, limit: 1 })
+        : query
         ? await engine.searchTakes(query, { sourceIds, limit: takeLimit })
         : await engine.listTakes({ sourceIds, kind: kind || undefined, active: true, limit: takeLimit });
       const takes = rawTakes

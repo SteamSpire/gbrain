@@ -110,6 +110,13 @@ describe('addTakesBatch + listTakes', () => {
 
     const hiddenTakes = await engine.listTakes({ sourceIds: ['hidden-source'] });
     expect(hiddenTakes.some(t => t.claim === 'Hidden source take')).toBe(true);
+
+    const hiddenTake = hiddenTakes.find(t => t.claim === 'Hidden source take')!;
+    const wrongSource = await engine.listTakes({ take_id: hiddenTake.id, sourceIds: ['default'] });
+    expect(wrongSource).toHaveLength(0);
+
+    const rightSource = await engine.listTakes({ take_id: hiddenTake.id, sourceIds: ['hidden-source'] });
+    expect(rightSource).toHaveLength(1);
   });
 });
 

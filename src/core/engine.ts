@@ -287,6 +287,7 @@ export interface Take {
 }
 
 export interface TakesListOpts {
+  take_id?: number;
   page_id?: number;
   page_slug?: string;       // resolved via JOIN
   sourceId?: string;
