@@ -18,6 +18,7 @@ describe('SteamSpire internal REST boundary', () => {
     expect(src).toContain("internalRouter.post('/search'");
     expect(src).toContain("internalRouter.post('/answer'");
     expect(src).toContain("internalRouter.post('/context-pack'");
+    expect(src).toContain("internalRouter.get('/models'");
     expect(src).toContain("internalRouter.post('/takes'");
     expect(src).toContain("internalRouter.patch('/takes/:takeId'");
     expect(src).toContain("internalRouter.post('/contradictions'");
@@ -30,6 +31,7 @@ describe('SteamSpire internal REST boundary', () => {
     expect(src).toContain("operationsByName.think.handler");
     expect(src).toContain("operationsByName.put_page.handler");
     expect(src).toContain("operationsByName.delete_page.handler");
+    expect(src).toContain("buildModelsReport(engine)");
     expect(src).toContain("softDeleteSource(engine, sourceId)");
     expect(src).not.toMatch(/internalRouter[\s\S]{0,1200}\/mcp/);
   });

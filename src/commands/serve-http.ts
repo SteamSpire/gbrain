@@ -34,6 +34,7 @@ import { paramDefToSchema } from '../mcp/tool-defs.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig, type GBrainConfig } from '../core/config.ts';
 import { buildError, serializeError } from '../core/errors.ts';
+import { buildReport as buildModelsReport } from './models.ts';
 import { VERSION } from '../version.ts';
 import * as db from '../core/db.ts';
 import { sqlQueryForEngine, executeRawJsonb } from '../core/sql-query.ts';
@@ -1200,6 +1201,14 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         }
       }
       res.status(202).json({ status: 'accepted', submissions });
+    } catch (e) {
+      handleInternalError(res, e);
+    }
+  });
+
+  internalRouter.get('/models', async (_req: Request, res: Response) => {
+    try {
+      res.json(await buildModelsReport(engine));
     } catch (e) {
       handleInternalError(res, e);
     }
