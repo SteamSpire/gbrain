@@ -59,13 +59,27 @@ interface ModelEntry {
   source: string;  // "default" | "config: <key>" | "env: <VAR>"
 }
 
+interface ManagedEnvEntry {
+  env_var: string;
+  config_key: string | null;
+  value: string | null;
+  models: string[];
+}
+
 interface ModelsReport {
   schema_version: 1;
   global_default: { value: string | null };
   tiers: Record<ModelTier, ModelEntry>;
   per_task: Array<{ key: string; tier: ModelTier; resolved: string; source: string; description: string }>;
   aliases: { defaults: Record<string, string>; user: Record<string, string> };
+  managed_env: Record<string, ManagedEnvEntry>;
 }
+
+const MANAGED_ENV_KEYS: Array<{ envVar: string; configKey: string | null }> = [
+  { envVar: 'GBRAIN_MODEL_CHAT', configKey: 'models.chat' },
+  { envVar: 'GBRAIN_MODEL_THINK', configKey: 'models.think' },
+  { envVar: 'GBRAIN_CHAT_FALLBACK_CHAIN', configKey: null },
+];
 
 async function probeSource(engine: BrainEngine, configKey: string, envVar: string): Promise<string | null> {
   // For per-task probes, return the source the resolver USED (config / env /
@@ -79,7 +93,24 @@ async function probeSource(engine: BrainEngine, configKey: string, envVar: strin
   return null;
 }
 
-async function buildReport(engine: BrainEngine): Promise<ModelsReport> {
+function splitManagedModels(value: string | undefined): string[] {
+  return (value ?? '').split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function managedEnvReport(): ModelsReport['managed_env'] {
+  return MANAGED_ENV_KEYS.reduce<ModelsReport['managed_env']>((out, { envVar, configKey }) => {
+    const raw = process.env[envVar]?.trim() || null;
+    out[envVar] = {
+      env_var: envVar,
+      config_key: configKey,
+      value: raw,
+      models: splitManagedModels(raw ?? undefined),
+    };
+    return out;
+  }, {});
+}
+
+export async function buildReport(engine: BrainEngine): Promise<ModelsReport> {
   const globalDefault = await engine.getConfig('models.default');
 
   const tiers = {} as Record<ModelTier, ModelEntry>;
@@ -120,10 +151,11 @@ async function buildReport(engine: BrainEngine): Promise<ModelsReport> {
     tiers,
     per_task,
     aliases: { defaults: { ...DEFAULT_ALIASES }, user: userAliases },
+    managed_env: managedEnvReport(),
   };
 }
 
-function formatText(report: ModelsReport): string {
+export function formatText(report: ModelsReport): string {
   const lines: string[] = [];
   lines.push('Tier routing:');
   for (const t of TIERS) {
@@ -137,6 +169,12 @@ function formatText(report: ModelsReport): string {
   lines.push('Per-task overrides:');
   for (const t of report.per_task) {
     lines.push(`  ${t.key.padEnd(34)} → ${t.resolved.padEnd(45)} [${t.source}]`);
+  }
+  lines.push('');
+  lines.push('Gauge-managed env:');
+  for (const key of MANAGED_ENV_KEYS.map(entry => entry.envVar)) {
+    const entry = report.managed_env[key];
+    lines.push(`  ${key.padEnd(28)} ${entry?.value ?? '(unset)'}`);
   }
   lines.push('');
   lines.push('Aliases:');
