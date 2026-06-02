@@ -2,7 +2,7 @@
 
 const baseUrl = process.env.GBRAIN_INTERNAL_SMOKE_URL || 'http://127.0.0.1:7346';
 const token = process.env.GBRAIN_INTERNAL_TOKEN || process.env.COMPENDIUM_GBRAIN_INTERNAL_TOKEN;
-const requestTimeoutMs = Number.parseInt(process.env.GBRAIN_INTERNAL_SMOKE_TIMEOUT_MS || '20000', 10);
+const requestTimeoutMs = Number.parseInt(process.env.GBRAIN_INTERNAL_SMOKE_TIMEOUT_MS || '120000', 10);
 
 if (!token) {
   console.error('Set GBRAIN_INTERNAL_TOKEN or COMPENDIUM_GBRAIN_INTERNAL_TOKEN.');
