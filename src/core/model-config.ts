@@ -5,12 +5,14 @@
  * `dream.<phase>.model` config key. Hierarchy (highest precedence first):
  *
  *   1. CLI flag (--model)
- *   2. New-key config (e.g. models.dream.synthesize)
- *   3. Old-key config (deprecated dream.synthesize.model, dream.patterns.model)
+ *   2. Managed env override for Gauge-owned keys (e.g. GBRAIN_MODEL_CHAT)
+ *   3. New-key config (e.g. models.dream.synthesize)
+ *   4. Old-key config (deprecated dream.synthesize.model, dream.patterns.model)
  *      — read with stderr deprecation warning, one-per-process
- *   4. Global default (models.default)
- *   5. Env var (process.env[envVar] or GBRAIN_MODEL)
- *   6. Hardcoded fallback (caller-supplied)
+ *   5. Global default (models.default)
+ *   6. Tier override (models.tier.<tier>)
+ *   7. Env var (process.env[envVar] or GBRAIN_MODEL)
+ *   8. Hardcoded fallback (caller-supplied)
  *
  * Aliases (`opus`, `sonnet`, `haiku`, `gemini`, `gpt`) resolve at the end so any
  * tier can use a short name. Unknown alias passes through unchanged so users can
@@ -110,6 +112,15 @@ const _subagentTierWarningsEmitted = new Set<string>();
 // Reset on process restart; one warning per (key, process) per Codex P1 #11.
 const _deprecationWarningsEmitted = new Set<string>();
 
+const MANAGED_CONFIG_ENV: Record<string, string> = {
+  'models.chat': 'GBRAIN_MODEL_CHAT',
+  'models.think': 'GBRAIN_MODEL_THINK',
+};
+
+export function managedEnvVarForConfigKey(configKey: string | undefined): string | undefined {
+  return configKey ? MANAGED_CONFIG_ENV[configKey] : undefined;
+}
+
 function emitDeprecationWarning(oldKey: string, newKey: string, ignored: boolean): void {
   if (_deprecationWarningsEmitted.has(oldKey)) return;
   _deprecationWarningsEmitted.add(oldKey);
@@ -141,8 +152,21 @@ export async function resolveModel(
     return await resolveAlias(engine, opts.cliFlag.trim());
   }
 
+  // 2. Gauge-managed deployment env wins over DB-backed config for these
+  // keys. Generic GBRAIN_MODEL intentionally keeps the older lower-precedence
+  // behavior below; this path is only for admin-configured source-of-truth
+  // values materialized from Gauge -> Infisical -> service env.
+  const managedEnvVar = managedEnvVarForConfigKey(opts.configKey);
+  if (managedEnvVar) {
+    const managedEnv = process.env[managedEnvVar];
+    if (managedEnv && managedEnv.trim()) {
+      const resolved = await resolveAlias(engine, managedEnv.trim());
+      return enforceSubagentCapable(resolved, opts.tier, `env:${managedEnvVar}`);
+    }
+  }
+
   if (engine) {
-    // 2. New-key config
+    // 3. New-key config
     if (opts.configKey) {
       const v = await engine.getConfig(opts.configKey);
       if (v && v.trim()) {
@@ -157,7 +181,7 @@ export async function resolveModel(
       }
     }
 
-    // 3. Old-key (deprecated) config
+    // 4. Old-key (deprecated) config
     if (opts.deprecatedConfigKey) {
       const v = await engine.getConfig(opts.deprecatedConfigKey);
       if (v && v.trim()) {
@@ -166,14 +190,14 @@ export async function resolveModel(
       }
     }
 
-    // 4. Global default
+    // 5. Global default
     const def = await engine.getConfig('models.default');
     if (def && def.trim()) {
       const resolved = await resolveAlias(engine, def.trim());
       return enforceSubagentCapable(resolved, opts.tier, 'models.default');
     }
 
-    // 5. Tier override (v0.31.12)
+    // 6. Tier override (v0.31.12)
     if (opts.tier) {
       const tierVal = await engine.getConfig(`models.tier.${opts.tier}`);
       if (tierVal && tierVal.trim()) {
@@ -183,20 +207,20 @@ export async function resolveModel(
     }
   }
 
-  // 6. Env var
+  // 7. Generic env var
   const env = process.env[envVar];
   if (env && env.trim()) {
     const resolved = await resolveAlias(engine, env.trim());
     return enforceSubagentCapable(resolved, opts.tier, `env:${envVar}`);
   }
 
-  // 7. Tier default (v0.31.12 — when no override beats us, the tier's
+  // 8. Tier default (v0.31.12 — when no override beats us, the tier's
   //    canonical model wins over caller-supplied fallback)
   if (opts.tier && TIER_DEFAULTS[opts.tier]) {
     return await resolveAlias(engine, TIER_DEFAULTS[opts.tier]);
   }
 
-  // 8. Hardcoded fallback (caller-supplied)
+  // 9. Hardcoded fallback (caller-supplied)
   return await resolveAlias(engine, opts.fallback);
 }
 

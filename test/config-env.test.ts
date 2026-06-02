@@ -128,4 +128,60 @@ describe('loadConfig env database URL precedence', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test('GBRAIN_MODEL_CHAT overrides file chat_model as Gauge-managed alias', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'gbrain-config-env-'));
+    try {
+      await withEnv(
+        {
+          GBRAIN_HOME: home,
+          GBRAIN_CHAT_MODEL: undefined,
+          GBRAIN_MODEL_CHAT: undefined,
+          GBRAIN_DATABASE_URL: undefined,
+          DATABASE_URL: undefined,
+        },
+        () => {
+          saveConfig({ engine: 'pglite', chat_model: 'anthropic:claude-sonnet-4-6' });
+        },
+      );
+
+      await withEnv(
+        {
+          GBRAIN_HOME: home,
+          GBRAIN_CHAT_MODEL: undefined,
+          GBRAIN_MODEL_CHAT: 'openrouter:openai/gpt-5.5',
+          GBRAIN_DATABASE_URL: undefined,
+          DATABASE_URL: undefined,
+        },
+        () => {
+          const cfg = loadConfig();
+          expect(cfg?.chat_model).toBe('openrouter:openai/gpt-5.5');
+        },
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('GBRAIN_CHAT_MODEL keeps precedence over GBRAIN_MODEL_CHAT compatibility alias', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'gbrain-config-env-'));
+    try {
+      await withEnv(
+        {
+          GBRAIN_HOME: home,
+          GBRAIN_CHAT_MODEL: 'openai:gpt-5.2',
+          GBRAIN_MODEL_CHAT: 'openrouter:openai/gpt-5.5',
+          GBRAIN_DATABASE_URL: undefined,
+          DATABASE_URL: undefined,
+        },
+        () => {
+          saveConfig({ engine: 'pglite', chat_model: 'anthropic:claude-sonnet-4-6' });
+          const cfg = loadConfig();
+          expect(cfg?.chat_model).toBe('openai:gpt-5.2');
+        },
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

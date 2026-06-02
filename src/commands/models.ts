@@ -31,6 +31,7 @@ import type { BrainEngine } from '../core/engine.ts';
 import {
   DEFAULT_ALIASES,
   TIER_DEFAULTS,
+  managedEnvVarForConfigKey,
   resolveModel,
   type ModelTier,
 } from '../core/model-config.ts';
@@ -70,6 +71,8 @@ async function probeSource(engine: BrainEngine, configKey: string, envVar: strin
   // For per-task probes, return the source the resolver USED (config / env /
   // tier default / hardcoded). The resolver itself is the source of truth;
   // we re-walk a subset of its precedence here to attribute the value.
+  const managedEnvVar = managedEnvVarForConfigKey(configKey);
+  if (managedEnvVar && process.env[managedEnvVar]?.trim()) return `env: ${managedEnvVar}`;
   const configVal = await engine.getConfig(configKey);
   if (configVal && configVal.trim()) return `config: ${configKey}`;
   if (process.env[envVar] && process.env[envVar]!.trim()) return `env: ${envVar}`;

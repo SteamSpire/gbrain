@@ -33,11 +33,16 @@ beforeEach(() => {
     return true;
   }) as typeof process.stderr.write;
   delete process.env.GBRAIN_MODEL;
+  delete process.env.GBRAIN_MODEL_CHAT;
+  delete process.env.GBRAIN_MODEL_THINK;
   _resetDeprecationWarningsForTest();
 });
 
 afterEach(() => {
   process.stderr.write = origWrite;
+  delete process.env.GBRAIN_MODEL;
+  delete process.env.GBRAIN_MODEL_CHAT;
+  delete process.env.GBRAIN_MODEL_THINK;
 });
 
 describe('resolveAlias', () => {
@@ -117,6 +122,32 @@ describe('resolveModel — 6-tier precedence', () => {
       fallback: 'sonnet',
     });
     expect(m).toBe(DEFAULT_ALIASES.haiku);
+  });
+
+  test('Gauge-managed models.chat env overrides stale DB config', async () => {
+    stub.set('models.chat', 'anthropic:claude-sonnet-4-6');
+    process.env.GBRAIN_MODEL_CHAT = 'openrouter:openai/gpt-5.5';
+
+    const m = await resolveModel(stub as never, {
+      configKey: 'models.chat',
+      tier: 'reasoning',
+      fallback: 'sonnet',
+    });
+
+    expect(m).toBe('openrouter:openai/gpt-5.5');
+  });
+
+  test('Gauge-managed models.think env overrides stale DB config', async () => {
+    stub.set('models.think', 'anthropic:claude-opus-4-7');
+    process.env.GBRAIN_MODEL_THINK = 'openai:gpt-5.5';
+
+    const m = await resolveModel(stub as never, {
+      configKey: 'models.think',
+      tier: 'deep',
+      fallback: 'opus',
+    });
+
+    expect(m).toBe('openai:gpt-5.5');
   });
 
   test('hardcoded fallback last', async () => {
