@@ -9,7 +9,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
+import { chmodSync, mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { runFriction } from '../src/commands/friction.ts';
@@ -160,6 +160,56 @@ describe('OpenClawRunner detection (reliable on box without openclaw)', () => {
     } finally {
       if (orig !== undefined) process.env.OPENCLAW_BIN = orig;
       else delete process.env.OPENCLAW_BIN;
+    }
+  });
+
+  test('invoke forwards managed provider keys to child process', async () => {
+    const saved = {
+      OPENCLAW_BIN: process.env.OPENCLAW_BIN,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+      ZEROENTROPY_API_KEY: process.env.ZEROENTROPY_API_KEY,
+    };
+    const bin = join(tmp, 'fake-openclaw');
+    const envOut = join(tmp, 'openclaw-env.txt');
+    writeFileSync(bin, [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'printf "OPENAI_API_KEY=%s\\n" "${OPENAI_API_KEY:-}" > "$OPENCLAW_ENV_OUT"',
+      'printf "ANTHROPIC_API_KEY=%s\\n" "${ANTHROPIC_API_KEY:-}" >> "$OPENCLAW_ENV_OUT"',
+      'printf "OPENROUTER_API_KEY=%s\\n" "${OPENROUTER_API_KEY:-}" >> "$OPENCLAW_ENV_OUT"',
+      'printf "ZEROENTROPY_API_KEY=%s\\n" "${ZEROENTROPY_API_KEY:-}" >> "$OPENCLAW_ENV_OUT"',
+    ].join('\n'));
+    chmodSync(bin, 0o755);
+
+    process.env.OPENCLAW_BIN = bin;
+    process.env.OPENAI_API_KEY = 'sk-openai-test';
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    process.env.OPENROUTER_API_KEY = 'sk-or-test';
+    process.env.ZEROENTROPY_API_KEY = 'ze-test';
+
+    try {
+      const { OpenClawRunner } = await import('../src/core/claw-test/runners/openclaw.ts');
+      const r = new OpenClawRunner();
+
+      await r.invoke({
+        cwd: tmp,
+        brief: 'test',
+        env: { OPENCLAW_ENV_OUT: envOut },
+        timeoutMs: 1000,
+        transcriptSink: { write: () => {}, nextOffset: () => 0, close: async () => {} },
+      });
+
+      expect(readFileSync(envOut, 'utf-8')).toContain('OPENAI_API_KEY=sk-openai-test');
+      expect(readFileSync(envOut, 'utf-8')).toContain('ANTHROPIC_API_KEY=sk-ant-test');
+      expect(readFileSync(envOut, 'utf-8')).toContain('OPENROUTER_API_KEY=sk-or-test');
+      expect(readFileSync(envOut, 'utf-8')).toContain('ZEROENTROPY_API_KEY=ze-test');
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 });

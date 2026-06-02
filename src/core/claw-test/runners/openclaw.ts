@@ -22,7 +22,7 @@ const DEFAULT_AGENT_NAME = 'default';
 /** Allow-list for env propagation when spawning openclaw. */
 const ENV_ALLOWLIST = [
   'PATH', 'HOME', 'USER', 'LANG', 'TZ', 'NODE_ENV',
-  'ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'ZEROENTROPY_API_KEY',
   'GBRAIN_HOME', 'GBRAIN_FRICTION_RUN_ID', 'GBRAIN_DATABASE_URL',
 ];
 

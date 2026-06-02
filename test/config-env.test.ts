@@ -184,4 +184,42 @@ describe('loadConfig env database URL precedence', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test('GBRAIN_CHAT_FALLBACK_CHAIN overrides file fallback chain as Gauge-managed env', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'gbrain-config-env-'));
+    try {
+      await withEnv(
+        {
+          GBRAIN_HOME: home,
+          GBRAIN_CHAT_FALLBACK_CHAIN: undefined,
+          GBRAIN_DATABASE_URL: undefined,
+          DATABASE_URL: undefined,
+        },
+        () => {
+          saveConfig({
+            engine: 'pglite',
+            chat_fallback_chain: ['anthropic:claude-sonnet-4-6'],
+          });
+        },
+      );
+
+      await withEnv(
+        {
+          GBRAIN_HOME: home,
+          GBRAIN_CHAT_FALLBACK_CHAIN: 'anthropic:claude-opus-4-7, openrouter:anthropic/claude-opus-4-7',
+          GBRAIN_DATABASE_URL: undefined,
+          DATABASE_URL: undefined,
+        },
+        () => {
+          const cfg = loadConfig();
+          expect(cfg?.chat_fallback_chain).toEqual([
+            'anthropic:claude-opus-4-7',
+            'openrouter:anthropic/claude-opus-4-7',
+          ]);
+        },
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
