@@ -143,6 +143,29 @@ describe('runGather', () => {
     expect(r.graphSlugs).toEqual([]);
   });
 
+  test('honors keyword-only search config for gathered pages', async () => {
+    let keywordCalled = false;
+    const fakeEngine = {
+      getConfig: async (key: string) => key === 'search.mcp_keyword_only' ? 'true' : null,
+      searchKeyword: async () => {
+        keywordCalled = true;
+        return [{
+          page_id: 1,
+          slug: 'people/alice-example',
+          title: 'Alice',
+          chunk_text: 'Alice founded Acme.',
+          score: 1,
+        }];
+      },
+      searchTakes: async () => [],
+      traversePaths: async () => [],
+    };
+
+    const r = await runGather(fakeEngine as any, { question: 'Alice founded Acme' });
+    expect(keywordCalled).toBe(true);
+    expect(r.pages.some(p => p.slug === 'people/alice-example')).toBe(true);
+  });
+
   test('honors takesHoldersAllowList filter', async () => {
     const r = await runGather(engine, { question: 'founder', takesHoldersAllowList: ['world'] });
     expect(r.takes.every(h => h.holder === 'world')).toBe(true);

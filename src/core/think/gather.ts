@@ -115,13 +115,20 @@ export async function runGather(
       ? { sourceId: opts.sourceId }
       : {};
 
-  // Stream 1: hybrid page search (existing primitive).
-  const pagesPromise = hybridSearch(engine, opts.question, {
-    limit: gatherLimit,
-    expansion: false,  // think provides its own anchor + graph context; no need for re-expansion
-    ...sourceScope,
-  }).catch((e) => {
-    process.stderr.write(`[think.gather] hybrid stream failed: ${(e as Error).message}\n`);
+  const keywordOnly = (await engine.getConfig('search.mcp_keyword_only')) === 'true';
+
+  // Stream 1: page search. Honor the same tenant escape hatch as MCP search so
+  // context-pack assembly can avoid slow provider-backed hybrid paths.
+  const pagesPromise = (keywordOnly
+    ? engine.searchKeyword(opts.question, { limit: gatherLimit, ...sourceScope })
+    : hybridSearch(engine, opts.question, {
+        limit: gatherLimit,
+        expansion: false,  // think provides its own anchor + graph context; no need for re-expansion
+        ...sourceScope,
+      })
+  ).catch((e) => {
+    const stream = keywordOnly ? 'keyword' : 'hybrid';
+    process.stderr.write(`[think.gather] ${stream} stream failed: ${(e as Error).message}\n`);
     return [] as SearchResult[];
   });
 
