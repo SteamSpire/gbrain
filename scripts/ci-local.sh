@@ -309,8 +309,9 @@ fi
 # any worktree gitdir as safe so `git status` etc. don't refuse.
 git config --global --add safe.directory '*' || true
 if [ ! -d /app/node_modules ] || [ -z "$(ls -A /app/node_modules 2>/dev/null)" ]; then
-  echo "[runner] First run (or --clean): bun install --frozen-lockfile"
-  bun install --frozen-lockfile
+  BUN_INSTALL_BACKEND="${BUN_INSTALL_BACKEND:-copyfile}"
+  echo "[runner] First run (or --clean): bun install --backend=${BUN_INSTALL_BACKEND} --frozen-lockfile"
+  bun install --backend="${BUN_INSTALL_BACKEND}" --frozen-lockfile
 fi
 __RUN_PHASES__
 EOF

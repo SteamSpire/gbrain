@@ -28,7 +28,8 @@ fi
 cd admin
 
 # Idempotent install — bun is fast enough on no-op (~50ms).
-bun install --silent >/dev/null 2>&1 || bun install
+BUN_INSTALL_BACKEND="${BUN_INSTALL_BACKEND:-copyfile}"
+bun install --backend="$BUN_INSTALL_BACKEND" --silent >/dev/null 2>&1 || bun install --backend="$BUN_INSTALL_BACKEND"
 
 # Build runs `tsc -b && vite build`. Output to admin/dist/. Exit non-zero
 # on TS error, missing symbol, or Vite bundling error.
