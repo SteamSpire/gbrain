@@ -203,3 +203,25 @@ export function summarizeCrashes(events: SupervisorEmission[]): CrashSummary {
   }
   return summary;
 }
+
+/**
+ * Return only events from the latest supervisor generation. A restarted
+ * supervisor writes a fresh `started` event, so older max-crash terminal
+ * events should not keep poisoning doctor/status after recovery.
+ */
+export function currentSupervisorGenerationEvents(events: SupervisorEmission[]): SupervisorEmission[] {
+  let startIndex = -1;
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i]?.event === 'started') {
+      startIndex = i;
+      break;
+    }
+  }
+  return startIndex >= 0 ? events.slice(startIndex) : events;
+}
+
+export function currentMaxCrashesExceededEvent(events: SupervisorEmission[]): SupervisorEmission | null {
+  return currentSupervisorGenerationEvents(events)
+    .filter((e) => e.event === 'max_crashes_exceeded')
+    .pop() ?? null;
+}

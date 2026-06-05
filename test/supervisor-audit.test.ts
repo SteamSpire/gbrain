@@ -15,6 +15,8 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
+  currentMaxCrashesExceededEvent,
+  currentSupervisorGenerationEvents,
   isCrashExit,
   summarizeCrashes,
   type CrashSummary,
@@ -173,5 +175,33 @@ describe('summarizeCrashes — aggregation', () => {
     expect(summary.total).toBe(1);
     expect(summary.by_cause.legacy).toBe(1);
     expect(summary.clean_exits).toBe(0);
+  });
+});
+
+describe('current supervisor generation — max crash state', () => {
+  test('old max_crashes_exceeded is cleared by a newer supervisor start', () => {
+    const events: SupervisorEmission[] = [
+      evt('started', { ts: '2026-05-16T00:00:00Z', supervisor_pid: 100 }),
+      evt('worker_exited', { ts: '2026-05-16T00:01:00Z', likely_cause: 'runtime_error', code: 1 }),
+      evt('max_crashes_exceeded', { ts: '2026-05-16T00:02:00Z', supervisor_pid: 100 }),
+      evt('shutting_down', { ts: '2026-05-16T00:03:00Z', supervisor_pid: 100 }),
+      evt('started', { ts: '2026-05-16T00:04:00Z', supervisor_pid: 200 }),
+      evt('worker_spawned', { ts: '2026-05-16T00:04:01Z', supervisor_pid: 200 }),
+    ];
+
+    const current = currentSupervisorGenerationEvents(events);
+
+    expect(current.map((e) => e.event)).toEqual(['started', 'worker_spawned']);
+    expect(currentMaxCrashesExceededEvent(events)).toBeNull();
+  });
+
+  test('current generation max_crashes_exceeded remains visible', () => {
+    const events: SupervisorEmission[] = [
+      evt('started', { ts: '2026-05-16T00:00:00Z', supervisor_pid: 200 }),
+      evt('worker_exited', { ts: '2026-05-16T00:01:00Z', likely_cause: 'runtime_error', code: 1 }),
+      evt('max_crashes_exceeded', { ts: '2026-05-16T00:02:00Z', supervisor_pid: 200 }),
+    ];
+
+    expect(currentMaxCrashesExceededEvent(events)?.event).toBe('max_crashes_exceeded');
   });
 });

@@ -880,7 +880,11 @@ HANDLER TYPES (built in)
       // ----- status subcommand -----
       if (isStatusCmd) {
         const { existsSync, readFileSync } = await import('fs');
-        const { readSupervisorEvents, summarizeCrashes } = await import('../core/minions/handlers/supervisor-audit.ts');
+        const {
+          currentMaxCrashesExceededEvent,
+          readSupervisorEvents,
+          summarizeCrashes,
+        } = await import('../core/minions/handlers/supervisor-audit.ts');
 
         let supervisorPid: number | null = null;
         let running = false;
@@ -902,7 +906,7 @@ HANDLER TYPES (built in)
         // v0.35.4.0's binary `classifyWorkerExit({code})` on this surface;
         // see doctor.ts for the layering rationale.
         const summary = summarizeCrashes(events);
-        const maxCrashesEvent = events.filter(e => e.event === 'max_crashes_exceeded').pop() ?? null;
+        const maxCrashesEvent = currentMaxCrashesExceededEvent(events);
 
         const status = {
           running,

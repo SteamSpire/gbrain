@@ -3346,7 +3346,11 @@ export async function buildChecks(
   // Does NOT run the supervisor itself — this is a read-only health check.
   try {
     const { DEFAULT_PID_FILE } = await import('../core/minions/supervisor.ts');
-    const { readSupervisorEvents, summarizeCrashes } = await import('../core/minions/handlers/supervisor-audit.ts');
+    const {
+      currentMaxCrashesExceededEvent,
+      readSupervisorEvents,
+      summarizeCrashes,
+    } = await import('../core/minions/handlers/supervisor-audit.ts');
 
     let supervisorPid: number | null = null;
     let running = false;
@@ -3377,7 +3381,7 @@ export async function buildChecks(
     const summary = summarizeCrashes(events);
     const crashes24h = summary.total;
     const causeStr = `runtime=${summary.by_cause.runtime_error} oom=${summary.by_cause.oom_or_external_kill} unknown=${summary.by_cause.unknown} legacy=${summary.by_cause.legacy}`;
-    const maxCrashesEvent = events.filter(e => e.event === 'max_crashes_exceeded').pop() ?? null;
+    const maxCrashesEvent = currentMaxCrashesExceededEvent(events);
 
     // Only surface a Check if the supervisor was ever observed (stops the
     // "never used the supervisor" install from getting a warn about it).
